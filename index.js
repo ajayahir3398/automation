@@ -3,6 +3,15 @@ const express = require('express');
 const path = require('path');
 const app = express();
 
+// Add error handling for uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+    console.error('Unhandled Rejection:', error);
+});
+
 // Constants
 const CONSTANTS = {
     WAIT_TIMES: {
@@ -80,6 +89,11 @@ app.use(express.static(path.join(__dirname)));
 // Route handlers
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+// Add health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok' });
 });
 
 // Login automation function
@@ -609,8 +623,20 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// Start the server
+// Start the server with error handling
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+}).on('error', (error) => {
+    console.error('Server failed to start:', error);
+    process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Shutting down gracefully...');
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
 });
