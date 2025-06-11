@@ -125,9 +125,8 @@ app.get('/health', (req, res) => {
 async function performTasks(phoneNumber, password) {
     let browser;
     try {
-        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
         browser = await puppeteer.launch({
-            headless: true,
+            headless: "new",
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -135,14 +134,7 @@ async function performTasks(phoneNumber, password) {
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
                 '--window-size=1920x1080'
-            ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-            cacheDirectory: cachePath,
-            ignoreDefaultArgs: ['--disable-extensions'],
-            env: {
-                ...process.env,
-                PUPPETEER_CACHE_DIR: cachePath
-            }
+            ]
         });
         const page = await browser.newPage();
 
