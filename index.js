@@ -111,7 +111,7 @@ async function performLogin(phoneNumber, password) {
                 '--disable-gpu',
                 '--window-size=1920x1080'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            executablePath: '/tmp/puppeteer-cache/chrome/linux-137.0.7151.55/chrome-linux64/chrome',
             cacheDirectory: cachePath,
             ignoreDefaultArgs: ['--disable-extensions'],
             env: {
