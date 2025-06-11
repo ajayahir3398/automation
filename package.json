@@ -6,10 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "build": "npm install && npx puppeteer browsers install chrome",
-    "postinstall": "npx puppeteer browsers install chrome",
-    "test-puppeteer": "node render-setup.js",
-    "test-chrome": "node test-chrome.js"
+    "postinstall": "PUPPETEER_CACHE_DIR=puppeteer-cache npx puppeteer browsers install chrome"
   },
   "keywords": [],
   "author": "",

@@ -1,7 +1,6 @@
 const puppeteer = require('puppeteer');
 const express = require('express');
 const path = require('path');
-const { launchBrowser } = require('./puppeteer-config');
 const app = express();
 
 // Add error handling for uncaught exceptions
@@ -126,11 +125,25 @@ app.get('/health', (req, res) => {
 async function performTasks(phoneNumber, password) {
     let browser;
     try {
-        // Use the new Puppeteer configuration
-        const { launchBrowser } = require('./puppeteer-config');
-        
-        console.log('Starting browser launch process...');
-        browser = await launchBrowser();
+        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
+        browser = await puppeteer.launch({
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920x1080'
+            ],
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            cacheDirectory: cachePath,
+            ignoreDefaultArgs: ['--disable-extensions'],
+            env: {
+                ...process.env,
+                PUPPETEER_CACHE_DIR: cachePath
+            }
+        });
         const page = await browser.newPage();
 
         // Set default timeout
@@ -369,28 +382,6 @@ async function restartVideo(page) {
 // Helper function to handle a single task
 async function handleSingleTask(page) {
     try {
-        // Add retry mechanism for task list visibility
-        // let retryCount = 0;
-        // const maxRetries = 3;
-
-        // while (retryCount < maxRetries) {
-        //     try {
-        //         await page.waitForSelector(CONSTANTS.SELECTORS.TASK.TASK_LIST, { 
-        //             visible: true,
-        //             timeout: 10000 
-        //         });
-        //         console.log('Task list is visible');
-        //         break;
-        //     } catch (error) {
-        //         retryCount++;
-        //         console.log(`Retry ${retryCount}/${maxRetries} for task list visibility`);
-        //         if (retryCount === maxRetries) {
-        //             throw new Error('Task list not found after multiple retries');
-        //         }
-        //         await wait(2000); // Wait 2 seconds before retrying
-        //     }
-        // }
-
         // Click first task
         const taskClicked = await page.evaluate(() => {
             const taskItems = document.querySelectorAll('div[data-v-02e24912].div');
@@ -405,16 +396,6 @@ async function handleSingleTask(page) {
             throw new Error('No task items found to click');
         }
         console.log('Selected first task item');
-
-        // Wait for navigation with timeout
-        // try {
-        //     await Promise.race([
-        //         page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-        //         wait(5000)
-        //     ]);
-        // } catch (error) {
-        //     console.log('Navigation timeout, continuing anyway');
-        // }
 
         // Wait for task details page to load and take screenshot
         console.log('Waiting 2 seconds for task details page to load');
