@@ -15,9 +15,10 @@ process.on('unhandledRejection', (error) => {
 // Constants
 const CONSTANTS = {
     WAIT_TIMES: {
-        PAGE_LOAD: 3000,
-        VIDEO_PLAY: 3000,
-        ANSWER_SUBMIT: 2000,
+        PAGE_LOAD: 2000,
+        ANSWER_BEFORE_SUBMIT: 1000,
+        ANSWER_SUBMIT: 1000,
+        ANSWER_AFTER_SUBMIT: 2000,
         NEXT_TASK: 3000
     },
     SELECTORS: {
@@ -45,9 +46,10 @@ const CONSTANTS = {
         TASK_TAB: 'screenshots/tasktab.png',
         TASK_DETAILS: 'screenshots/taskdetails.png',
         VIDEO_PLAYING: 'screenshots/videoPlaying.png',
-        ANSWER_PAGE: 'screenshots/answerPage.png',
+        ANSWER_OPTIONS: 'screenshots/answerOptions.png',
         AFTER_SUBMIT: 'screenshots/afterSubmit.png',
-        AFTER_BACK: 'screenshots/afterBack.png'
+        AFTER_BACK: 'screenshots/afterBack.png',
+        GO_BACK: 'screenshots/goBack.png'
     },
     VIDEO: {
         REQUIRED_SECONDS: 15,
@@ -58,6 +60,29 @@ const CONSTANTS = {
         RESTART_WAIT: 2000        // Wait time after restart
     }
 };
+
+// Phone number validation function
+function validatePhoneNumber(phoneNumber) {
+    // Remove any non-digit characters
+    const cleanedNumber = phoneNumber.replace(/\D/g, '');
+
+    // Pattern for phone numbers:
+    // - Must start with 1-9
+    // - Must be exactly 10 digits
+    const phonePattern = /^[1-9]\d{9}$/;
+
+    if (!phonePattern.test(cleanedNumber)) {
+        return {
+            isValid: false,
+            message: 'Invalid phone number format. Must be 10 digits starting with 1-9'
+        };
+    }
+
+    return {
+        isValid: true,
+        message: 'Valid phone number'
+    };
+}
 
 // Utility functions
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -97,11 +122,11 @@ app.get('/health', (req, res) => {
 });
 
 // Login automation function
-async function performLogin(phoneNumber, password) {
+async function performTasks(phoneNumber, password) {
     let browser;
     try {
         const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
-        browser = await puppeteer.launch({ 
+        browser = await puppeteer.launch({
             headless: true,
             args: [
                 '--no-sandbox',
@@ -142,60 +167,48 @@ async function performLogin(phoneNumber, password) {
         ]);
         console.log('Clicked login button and waiting for navigation');
 
-        // Wait for page load and take screenshot
-        console.log('Waiting 3 seconds for page to load');
+        // Wait for home page to load and take screenshot
+        console.log('Waiting 2 seconds for home page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN);
-
-        // Verify login success
-        const currentUrl = await page.url();
-        console.log('Current URL after login:', currentUrl);
         console.log('Login process completed successfully');
 
-        // Navigate to task tab
-        console.log('Waiting for tabbar to be visible');
         if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.TABBAR)) {
             throw new Error('Task tabbar not found');
         }
-        console.log('Tabbar is visible');
 
+        // Navigate to task tab
         await page.evaluate(() => {
             const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
             const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
             if (taskTab) {
                 taskTab.click();
-                console.log('Clicked Task tab');
             }
         });
 
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
         console.log('Navigated to Task page');
 
-        console.log('Waiting 3 seconds for page to load');
+        console.log('Waiting 2 seconds for page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
-        console.log('Initial remaining tasks count:', remainingTasksCount);
+        console.log('remaining tasks count:', remainingTasksCount);
 
         while (remainingTasksCount > 0) {
             const result = await handleSingleTask(page);
             if (!result.success) {
                 throw new Error(result.message);
             }
-            
-            // Wait before checking remaining tasks
-            await wait(3000);
-            remainingTasksCount = await getRemainingTasksCount(page);
-            console.log('Updated remaining tasks count:', remainingTasksCount);
         }
 
-        console.log('All tasks completed successfully');
+        console.log('All today\'s tasks completed successfully');
         await browser.close();
-        return { success: true, message: 'All tasks completed successfully' };
+        return { success: true, message: 'All today\'s tasks completed successfully' };
 
     } catch (error) {
-        console.error('Error in performLogin:', error.message);
+        console.error('Error in performTasks:', error.message);
         if (browser) await browser.close();
         throw error;
     }
@@ -209,14 +222,10 @@ async function getRemainingTasksCount(page) {
                 .find(el => el.textContent.includes('Tasks remaining today:'));
             return taskElement ? taskElement.textContent.trim() : '';
         });
-        
+
         // Extract the number using a more precise regex
         const match = remainingTasksText.match(/Tasks remaining today:\s*(\d+)/);
         const count = match ? parseInt(match[1]) : 0;
-        
-        console.log('Found remaining tasks text:', remainingTasksText);
-        console.log('Extracted count:', count);
-        
         return count;
     } catch (error) {
         console.error('Error getting remaining tasks count:', error.message);
@@ -231,11 +240,11 @@ async function handleVideoWatching(page) {
     let previousSeconds = 0;
     let stuckCount = 0;
     let videoRestartAttempts = 0;
-    const startTime = Date.now();
+    let startTime = Date.now();
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         // Check if we've been stuck too long
-        if (Date.now() - startTime > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
+        if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
             console.log('Video watching timeout reached, attempting to restart video');
             if (await restartVideo(page)) {
                 // Reset counters after successful restart
@@ -263,18 +272,18 @@ async function handleVideoWatching(page) {
         if (watchedSeconds === previousSeconds) {
             stuckCount++;
             // If we're stuck at 13 or 14 seconds, and it's been a few checks, consider the video complete
-            if ((watchedSeconds === 13 || watchedSeconds === 14) && stuckCount >= 3) {
+            if ((watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
                 console.log(`Video appears to be complete at ${watchedSeconds} seconds (shorter video)`);
                 return true;
             }
-            
+
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
                 console.log('Video appears to be stuck, attempting to restart');
                 if (videoRestartAttempts >= CONSTANTS.VIDEO.MAX_RESTART_ATTEMPTS) {
                     console.log('Maximum restart attempts reached');
                     return false;
                 }
-                
+
                 if (await restartVideo(page)) {
                     videoRestartAttempts++;
                     stuckCount = 0;
@@ -373,29 +382,27 @@ async function restartVideo(page) {
 // Helper function to handle a single task
 async function handleSingleTask(page) {
     try {
-        console.log('Waiting for task list to be visible');
-        
         // Add retry mechanism for task list visibility
-        let retryCount = 0;
-        const maxRetries = 3;
-        
-        while (retryCount < maxRetries) {
-            try {
-                await page.waitForSelector(CONSTANTS.SELECTORS.TASK.TASK_LIST, { 
-                    visible: true,
-                    timeout: 10000 
-                });
-                console.log('Task list is visible');
-                break;
-            } catch (error) {
-                retryCount++;
-                console.log(`Retry ${retryCount}/${maxRetries} for task list visibility`);
-                if (retryCount === maxRetries) {
-                    throw new Error('Task list not found after multiple retries');
-                }
-                await wait(2000); // Wait 2 seconds before retrying
-            }
-        }
+        // let retryCount = 0;
+        // const maxRetries = 3;
+
+        // while (retryCount < maxRetries) {
+        //     try {
+        //         await page.waitForSelector(CONSTANTS.SELECTORS.TASK.TASK_LIST, { 
+        //             visible: true,
+        //             timeout: 10000 
+        //         });
+        //         console.log('Task list is visible');
+        //         break;
+        //     } catch (error) {
+        //         retryCount++;
+        //         console.log(`Retry ${retryCount}/${maxRetries} for task list visibility`);
+        //         if (retryCount === maxRetries) {
+        //             throw new Error('Task list not found after multiple retries');
+        //         }
+        //         await wait(2000); // Wait 2 seconds before retrying
+        //     }
+        // }
 
         // Click first task
         const taskClicked = await page.evaluate(() => {
@@ -410,25 +417,26 @@ async function handleSingleTask(page) {
         if (!taskClicked) {
             throw new Error('No task items found to click');
         }
-        console.log('Clicked first task item');
+        console.log('Selected first task item');
 
         // Wait for navigation with timeout
-        try {
-            await Promise.race([
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-                wait(5000)
-            ]);
-        } catch (error) {
-            console.log('Navigation timeout, continuing anyway');
-        }
-        console.log('Navigated to task details page');
+        // try {
+        //     await Promise.race([
+        //         page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+        //         wait(5000)
+        //     ]);
+        // } catch (error) {
+        //     console.log('Navigation timeout, continuing anyway');
+        // }
 
-        console.log('Waiting 3 seconds for page to load');
+        // Wait for task details page to load and take screenshot
+        console.log('Waiting 2 seconds for task details page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS);
+        console.log('Navigated to task details page');
 
         // Get advertisement text
-        console.log('Getting advertisement text');
+        console.log('Extracting advertisement text');
         const adText = await page.evaluate(() => {
             const introDiv = Array.from(document.querySelectorAll('div[data-v-1d18d737]'))
                 .find(el => el.textContent.trim() === 'Advertising Introduction');
@@ -447,17 +455,14 @@ async function handleSingleTask(page) {
 
         while (!videoSuccess && videoRetryCount < maxVideoRetries) {
             try {
-                console.log('Waiting for video element to be visible');
                 if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
                     throw new Error('Video element not found');
                 }
-                console.log('Video element is visible');
 
                 await page.evaluate(() => {
                     const playButton = document.querySelector('.vjs-big-play-button');
                     if (playButton) {
                         playButton.click();
-                        console.log('Clicked play button');
                     }
                 });
 
@@ -465,25 +470,24 @@ async function handleSingleTask(page) {
                     const video = document.querySelector('video');
                     return video && !video.paused;
                 });
-                console.log('Video started playing');
 
-                console.log('Waiting 3 seconds for video to play');
-                await wait(CONSTANTS.WAIT_TIMES.VIDEO_PLAY);
+                console.log('Video started playing');
                 await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING);
 
                 videoSuccess = await handleVideoWatching(page);
+
                 if (!videoSuccess) {
                     videoRetryCount++;
                     console.log(`Video watching failed, attempt ${videoRetryCount}/${maxVideoRetries}`);
                     if (videoRetryCount < maxVideoRetries) {
-                        await wait(2000);
+                        await wait(1000);
                     }
                 }
             } catch (error) {
                 console.error('Error during video playback:', error.message);
                 videoRetryCount++;
                 if (videoRetryCount < maxVideoRetries) {
-                    await wait(2000);
+                    await wait(1000);
                 }
             }
         }
@@ -495,12 +499,16 @@ async function handleSingleTask(page) {
         // Handle answer submission
         await handleAnswerSubmission(page, adText);
 
+        console.log('Waiting 2 seconds for page to load');
+        await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
+
         // Check remaining tasks
         const remainingTasksCount = await getRemainingTasksCount(page);
         console.log('Remaining tasks count:', remainingTasksCount);
 
         if (remainingTasksCount > 0) {
-            // Instead of recursive call, return to performLogin
+            // Instead of recursive call, return to performTasks
             return { success: true, message: 'Task completed, more tasks available' };
         } else {
             console.log('No remaining tasks for today');
@@ -521,32 +529,37 @@ async function handleAnswerSubmission(page, adText) {
             const startButton = document.querySelector('button.van-button--danger .van-button__text');
             if (startButton && startButton.textContent.includes('Start Answering')) {
                 startButton.closest('button').click();
-                console.log('Clicked Start Answering button');
             }
         });
 
-        console.log('Waiting for navigation to answer page...');
-        await Promise.race([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            wait(5000)
-        ]);
-        console.log('Navigated to answer page');
-
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_PAGE);
+        console.log('Waiting 2 seconds for answer options to load and take screenshot');
+        await wait(2000);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS);
 
         // Get and submit answer
         const answerResult = await page.evaluate((adText) => {
             const answers = Array.from(document.querySelectorAll('div[data-v-1d18d737].answer'))
                 .map(answer => answer.textContent.trim());
-            answers.findIndex(answer => answer.includes('BVLGARI')) !== -1 ? answers.push('Bulgari') : '';
-            answers.findIndex(answer => answer.includes('MontresBreguet')) !== -1 ? answers.push('Breguet') : '';
-            answers.findIndex(answer => answer.includes('hermes')) !== -1 ? answers.push('Hermès') : '';
+
+            // Add alternative spellings for brand names
+            const brandMappings = {
+                'BVLGARI': 'Bulgari',
+                'MontresBreguet': 'Breguet',
+                'hermes': 'Hermès'
+            };
+
+            Object.entries(brandMappings).forEach(([original, alternative]) => {
+                if (answers.some(answer => answer.includes(original))) {
+                    answers.push(alternative);
+                }
+            });
+
             const correctAnswer = answers.find(answer => adText.toLowerCase().includes(answer.toLowerCase()));
             return { answers, correctAnswer, adText };
         }, adText);
+        console.log('Advertisement text:', answerResult.adText);
         console.log('Answer options:', answerResult.answers);
         console.log('Correct answer:', answerResult.correctAnswer);
-        console.log('Advertisement text:', answerResult.adText);
 
         if (answerResult.correctAnswer) {
             await page.evaluate((correctAnswer) => {
@@ -554,12 +567,12 @@ async function handleAnswerSubmission(page, adText) {
                     .find(el => el.textContent.trim() === correctAnswer);
                 if (answerElement) {
                     answerElement.click();
-                    console.log('Clicked correct answer:', correctAnswer);
                 }
             }, answerResult.correctAnswer);
+            console.log('Selected correct answer');
 
-            console.log('Waiting 2 seconds before submitting answer');
-            await wait(CONSTANTS.WAIT_TIMES.ANSWER_SUBMIT);
+            console.log('Waiting 1 second before submitting answer');
+            await wait(CONSTANTS.WAIT_TIMES.ANSWER_BEFORE_SUBMIT);
 
             // Submit answer
             await page.evaluate(() => {
@@ -569,19 +582,16 @@ async function handleAnswerSubmission(page, adText) {
                     return buttonText && buttonText.textContent.trim() === 'Submit Answer';
                 });
                 if (submitBtn) {
-                    submitBtn.click();
-                    console.log('Clicked Submit Answer button');
+                    submitBtn.click()
                 }
             });
+            console.log('Answer Submitted');
 
-            console.log('Waiting 2 seconds before taking screenshot');
-            await wait(CONSTANTS.WAIT_TIMES.ANSWER_SUBMIT);
+            console.log('Waiting 2 seconds to confirm answer is correct and take screenshot');
+            await wait(CONSTANTS.WAIT_TIMES.ANSWER_AFTER_SUBMIT);
             await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT);
 
             // Click Back to next
-            console.log('Waiting 2 seconds before clicking Back to next');
-            await wait(CONSTANTS.WAIT_TIMES.ANSWER_SUBMIT);
-
             await page.evaluate(() => {
                 const backButtons = Array.from(document.querySelectorAll('button.van-button--danger'));
                 const backBtn = backButtons.find(button => {
@@ -590,17 +600,19 @@ async function handleAnswerSubmission(page, adText) {
                 });
                 if (backBtn) {
                     backBtn.click();
-                    console.log('Clicked Back to next button');
                 }
             });
-
-            await wait(CONSTANTS.WAIT_TIMES.ANSWER_SUBMIT);
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_BACK);
+            console.log('Clicked Back to next task button');
         } else {
-            // If no match found, throw error with detailed information
-            throw new Error(`No matching answer found. Advertisement text: "${answerResult.adText}". Available answers: ${answerResult.answers.join(', ')}`);
+            // If no match found, try to go back to task list
+            console.log('No matching answer found, attempting to go back to task list');
+            await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+            console.log('Waiting 2 seconds for page to load');
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+            console.log('Successfully went back to task list using page.goBack()');
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK);
+            return { success: true, message: 'Returned to task list due to no matching answer' };
         }
-
     } catch (error) {
         console.error('Error in handleAnswerSubmission:', error.message);
         throw error;
@@ -619,8 +631,17 @@ app.post('/login', async (req, res) => {
         });
     }
 
+    // Validate phone number before proceeding
+    const phoneValidation = validatePhoneNumber(phoneNumber);
+    if (!phoneValidation.isValid) {
+        return res.status(400).json({
+            success: false,
+            message: phoneValidation.message
+        });
+    }
+
     try {
-        const result = await performLogin(phoneNumber, password);
+        const result = await performTasks(phoneNumber, password);
         res.json(result);
     } catch (error) {
         console.error('Server error:', error.message);

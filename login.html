@@ -86,7 +86,7 @@
                 
                 if (result.success) {
                     messageDiv.className = 'success';
-                    messageDiv.textContent = 'Login successful!';
+                    messageDiv.textContent = result.message;
                 } else {
                     messageDiv.className = 'error';
                     messageDiv.textContent = result.message || 'Login failed';
