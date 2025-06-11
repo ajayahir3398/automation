@@ -16,7 +16,7 @@ process.on('unhandledRejection', (error) => {
 const CONSTANTS = {
     WAIT_TIMES: {
         PAGE_LOAD: 2000,
-        ANSWER_BEFORE_SUBMIT: 1000,
+        ANSWER_BEFORE_SUBMIT: 2000,
         ANSWER_SUBMIT: 1000,
         ANSWER_AFTER_SUBMIT: 2000,
         NEXT_TASK: 3000
@@ -539,7 +539,7 @@ async function handleAnswerSubmission(page, adText) {
             }, answerResult.correctAnswer);
             console.log('Selected correct answer');
 
-            console.log('Waiting 1 second before submitting answer');
+            console.log('Waiting 2 second before submitting answer');
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_BEFORE_SUBMIT);
 
             // Submit answer
