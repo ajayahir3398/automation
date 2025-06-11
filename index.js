@@ -126,62 +126,11 @@ app.get('/health', (req, res) => {
 async function performTasks(phoneNumber, password) {
     let browser;
     try {
-        // Configure Puppeteer for Render deployment
-        const isRender = process.env.RENDER || process.env.RENDER_EXTERNAL_URL;
+        // Use the new Puppeteer configuration
+        const { launchBrowser } = require('./puppeteer-config');
         
-        // Puppeteer launch options optimized for Render
-        const launchOptions = {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--window-size=1920x1080',
-                '--disable-web-security',
-                '--disable-features=VizDisplayCompositor',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding'
-            ],
-            ignoreDefaultArgs: ['--disable-extensions']
-        };
-
-        // On Render, try multiple approaches for Chrome
-        if (isRender) {
-            console.log('Running on Render - configuring Chrome for cloud environment');
-            
-            // Clear any cached executable path
-            delete process.env.PUPPETEER_EXECUTABLE_PATH;
-            
-            // Force Puppeteer to download its own Chrome
-            process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'false';
-            
-            // Add additional args for cloud environment
-            launchOptions.args.push('--disable-dev-shm-usage');
-            launchOptions.args.push('--disable-ipc-flooding-protection');
-        }
-
-        console.log('Launching browser with options:', JSON.stringify(launchOptions, null, 2));
-        
-        // Try to launch browser with error handling
-        try {
-            browser = await puppeteer.launch(launchOptions);
-        } catch (launchError) {
-            console.error('Initial launch failed:', launchError.message);
-            
-            // Fallback: try without executable path
-            console.log('Trying fallback launch without executable path...');
-            const fallbackOptions = { ...launchOptions };
-            delete fallbackOptions.executablePath;
-            
-            browser = await puppeteer.launch(fallbackOptions);
-        }
-        
+        console.log('Starting browser launch process...');
+        browser = await launchBrowser();
         const page = await browser.newPage();
 
         // Set default timeout

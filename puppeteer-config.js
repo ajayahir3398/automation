@@ -28,6 +28,10 @@ function getPuppeteerConfig() {
     if (isRender) {
         console.log('Running on Render - configuring Chrome for cloud environment');
         
+        // Set cache directory for Render
+        const cacheDir = '/opt/render/.cache/puppeteer';
+        process.env.PUPPETEER_CACHE_DIR = cacheDir;
+        
         // Clear any cached executable path
         delete process.env.PUPPETEER_EXECUTABLE_PATH;
         
@@ -37,6 +41,9 @@ function getPuppeteerConfig() {
         // Add additional args for cloud environment
         launchOptions.args.push('--disable-dev-shm-usage');
         launchOptions.args.push('--disable-ipc-flooding-protection');
+        
+        // Set cache directory in launch options
+        launchOptions.cacheDirectory = cacheDir;
     }
 
     return launchOptions;
@@ -49,15 +56,26 @@ async function launchBrowser() {
     console.log('Launching browser with options:', JSON.stringify(launchOptions, null, 2));
     
     try {
+        // First, try to install Chrome if not present
+        const { execSync } = require('child_process');
+        try {
+            console.log('Installing Chrome browser...');
+            execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
+            console.log('Chrome browser installed successfully');
+        } catch (installError) {
+            console.log('Chrome installation failed, continuing with existing setup:', installError.message);
+        }
+        
         const browser = await puppeteer.launch(launchOptions);
         console.log('Browser launched successfully');
         return browser;
     } catch (launchError) {
         console.error('Initial launch failed:', launchError.message);
         
-        // Fallback: try without executable path
-        console.log('Trying fallback launch without executable path...');
+        // Fallback: try without cache directory
+        console.log('Trying fallback launch without cache directory...');
         const fallbackOptions = { ...launchOptions };
+        delete fallbackOptions.cacheDirectory;
         delete fallbackOptions.executablePath;
         
         const browser = await puppeteer.launch(fallbackOptions);

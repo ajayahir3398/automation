@@ -2,7 +2,7 @@ services:
   - type: web
     name: dteworks-automation
     env: node
-    buildCommand: npm install
+    buildCommand: npm install && npx puppeteer browsers install chrome
     startCommand: node index.js
     envVars:
       - key: NODE_ENV
@@ -11,9 +11,12 @@ services:
         value: false
       - key: PUPPETEER_EXECUTABLE_PATH
         value: ""
+      - key: PUPPETEER_CACHE_DIR
+        value: "/opt/render/.cache/puppeteer"
     buildFilter:
       paths:
         - package.json
         - package-lock.json
         - index.js
-        - login.html 
+        - login.html
+        - puppeteer-config.js 
