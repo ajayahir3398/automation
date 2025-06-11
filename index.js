@@ -207,10 +207,17 @@ async function getRemainingTasksCount(page) {
         const remainingTasksText = await page.evaluate(() => {
             const taskElement = Array.from(document.querySelectorAll('div[data-v-02e24912]'))
                 .find(el => el.textContent.includes('Tasks remaining today:'));
-            return taskElement ? taskElement.textContent : '';
+            return taskElement ? taskElement.textContent.trim() : '';
         });
-        const match = remainingTasksText.match(/\d+/);
-        return match ? parseInt(match[0]) : 0;
+        
+        // Extract the number using a more precise regex
+        const match = remainingTasksText.match(/Tasks remaining today:\s*(\d+)/);
+        const count = match ? parseInt(match[1]) : 0;
+        
+        console.log('Found remaining tasks text:', remainingTasksText);
+        console.log('Extracted count:', count);
+        
+        return count;
     } catch (error) {
         console.error('Error getting remaining tasks count:', error.message);
         return 0;
@@ -533,6 +540,7 @@ async function handleAnswerSubmission(page, adText) {
                 .map(answer => answer.textContent.trim());
             answers.findIndex(answer => answer.includes('BVLGARI')) !== -1 ? answers.push('Bulgari') : '';
             answers.findIndex(answer => answer.includes('MontresBreguet')) !== -1 ? answers.push('Breguet') : '';
+            answers.findIndex(answer => answer.includes('hermes')) !== -1 ? answers.push('Hermès') : '';
             const correctAnswer = answers.find(answer => adText.toLowerCase().includes(answer.toLowerCase()));
             return { answers, correctAnswer, adText };
         }, adText);

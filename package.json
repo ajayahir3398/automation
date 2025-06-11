@@ -6,8 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "build": "npm install && mkdir -p /opt/render/.cache/puppeteer && npx puppeteer browsers install chrome --path=/opt/render/.cache/puppeteer && chmod -R 777 /opt/render/.cache/puppeteer",
-    "healthcheck": "curl -f http://localhost:$PORT/ || exit 1"
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "keywords": [],
   "author": "",
