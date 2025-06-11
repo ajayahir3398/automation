@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "npm install",
+    "postinstall": "node -e \"console.log('Post-install script completed')\"",
+    "test-puppeteer": "node render-setup.js"
   },
   "keywords": [],
   "author": "",
