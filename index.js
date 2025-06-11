@@ -136,7 +136,7 @@ async function performTasks(phoneNumber, password) {
                 '--disable-gpu',
                 '--window-size=1920x1080'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            executablePath: undefined,
             cacheDirectory: cachePath,
             ignoreDefaultArgs: ['--disable-extensions'],
             env: {
