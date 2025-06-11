@@ -5,8 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js",
-    "postinstall": "PUPPETEER_CACHE_DIR=puppeteer-cache npx puppeteer browsers install chrome"
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +14,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "nodemon": "^3.1.10",
-    "puppeteer": "^24.10.0"
+    "puppeteer": "^20.9.0"
   },
   "engines": {
     "node": ">=18.0.0"
