@@ -96,8 +96,6 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 
-const executablePath = path.join(__dirname, 'puppeteer-cache/chrome/linux-137.0.7151.55/chrome-linux64/chrome');
-
 // Login automation function
 async function performLogin(phoneNumber, password) {
     let browser;
@@ -113,7 +111,7 @@ async function performLogin(phoneNumber, password) {
                 '--disable-gpu',
                 '--window-size=1920x1080'
             ],
-            executablePath: executablePath,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
             cacheDirectory: cachePath,
             ignoreDefaultArgs: ['--disable-extensions'],
             env: {
