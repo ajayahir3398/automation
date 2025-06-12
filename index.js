@@ -140,11 +140,6 @@ async function performTasks(phoneNumber, password) {
             ]
         };
 
-        // Only set executablePath on Render
-        if (process.env.RENDER) {
-            launchOptions.executablePath = '/usr/bin/google-chrome';
-        }
-
         console.log('Launch options:', JSON.stringify(launchOptions, null, 2));
         
         browser = await puppeteer.launch(launchOptions);
