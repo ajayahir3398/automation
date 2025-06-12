@@ -127,13 +127,16 @@ async function performTasks(phoneNumber, password) {
     try {
         browser = await puppeteer.launch({
             headless: "new",
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
-                '--window-size=1920x1080'
+                '--window-size=1920x1080',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
             ]
         });
         const page = await browser.newPage();
