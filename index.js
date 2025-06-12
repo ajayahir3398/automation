@@ -128,10 +128,6 @@ async function performTasks(phoneNumber, password) {
     try {
         console.log('Starting browser launch process...');
         
-        // Log the current working directory and environment
-        console.log('Current working directory:', process.cwd());
-        console.log('NODE_ENV:', process.env.NODE_ENV);
-        
         const launchOptions = {
             headless: "new",
             args: [
@@ -140,12 +136,14 @@ async function performTasks(phoneNumber, password) {
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
-                '--window-size=1920x1080',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
-            ],
-            ignoreDefaultArgs: ['--disable-extensions']
+                '--window-size=1920x1080'
+            ]
         };
+
+        // Only set executablePath on Render
+        if (process.env.RENDER) {
+            launchOptions.executablePath = '/usr/bin/google-chrome';
+        }
 
         console.log('Launch options:', JSON.stringify(launchOptions, null, 2));
         
