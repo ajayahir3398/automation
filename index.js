@@ -125,6 +125,7 @@ app.get('/health', (req, res) => {
 async function performTasks(phoneNumber, password) {
     let browser;
     try {
+        console.log('Launching browser...');
         browser = await puppeteer.launch({
             headless: "new",
             args: [
@@ -136,7 +137,8 @@ async function performTasks(phoneNumber, password) {
                 '--window-size=1920x1080',
                 '--disable-web-security',
                 '--disable-features=IsolateOrigins,site-per-process'
-            ]
+            ],
+            ignoreDefaultArgs: ['--disable-extensions']
         });
         const page = await browser.newPage();
 
