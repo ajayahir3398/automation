@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const app = express();
 
 // Add error handling for uncaught exceptions
@@ -125,8 +126,13 @@ app.get('/health', (req, res) => {
 async function performTasks(phoneNumber, password) {
     let browser;
     try {
-        console.log('Launching browser...');
-        browser = await puppeteer.launch({
+        console.log('Starting browser launch process...');
+        
+        // Log the current working directory and environment
+        console.log('Current working directory:', process.cwd());
+        console.log('NODE_ENV:', process.env.NODE_ENV);
+        
+        const launchOptions = {
             headless: "new",
             args: [
                 '--no-sandbox',
@@ -139,8 +145,15 @@ async function performTasks(phoneNumber, password) {
                 '--disable-features=IsolateOrigins,site-per-process'
             ],
             ignoreDefaultArgs: ['--disable-extensions']
-        });
+        };
+
+        console.log('Launch options:', JSON.stringify(launchOptions, null, 2));
+        
+        browser = await puppeteer.launch(launchOptions);
+        console.log('Browser launched successfully');
+        
         const page = await browser.newPage();
+        console.log('New page created');
 
         // Set default timeout
         page.setDefaultTimeout(30000);
