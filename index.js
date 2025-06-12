@@ -194,13 +194,16 @@ async function performTasks(phoneNumber, password) {
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
-        console.log('remaining tasks count:', remainingTasksCount);
+        console.log('Remaining tasks count:', remainingTasksCount);
 
         while (remainingTasksCount > 0) {
             const result = await handleSingleTask(page);
             if (!result.success) {
                 throw new Error(result.message);
             }
+            // Update the count after each task
+            remainingTasksCount = await getRemainingTasksCount(page);
+            console.log('Remaining tasks count:', remainingTasksCount);
         }
 
         console.log('All today\'s tasks completed successfully');
@@ -509,18 +512,10 @@ async function handleAnswerSubmission(page, adText) {
             const answers = Array.from(document.querySelectorAll('div[data-v-1d18d737].answer'))
                 .map(answer => answer.textContent.trim());
 
-            // Add alternative spellings for brand names
-            const brandMappings = {
-                'BVLGARI': 'Bulgari',
-                'MontresBreguet': 'Breguet',
-                'hermes': 'Hermès'
-            };
-
-            Object.entries(brandMappings).forEach(([original, alternative]) => {
-                if (answers.some(answer => answer.includes(original))) {
-                    answers.push(alternative);
-                }
-            });
+            // // Add alternative spellings for brand names
+            // answers.findIndex(answer => answer.includes('BVLGARI')) !== -1 ? answers.push('Bulgari') : '';
+            // answers.findIndex(answer => answer.includes('MontresBreguet')) !== -1 ? answers.push('Breguet') : '';
+            // answers.findIndex(answer => answer.includes('hermes')) !== -1 ? answers.push('Hermès') : '';
 
             const correctAnswer = answers.find(answer => adText.toLowerCase().includes(answer.toLowerCase()));
             return { answers, correctAnswer, adText };
