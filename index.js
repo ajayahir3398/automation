@@ -127,7 +127,7 @@ async function performTasks(phoneNumber, password) {
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            executablePath: "/usr/bin/chromium-browser", // use the system installed chromium
+            executablePath: '/usr/bin/chromium',  // system installed chromium path
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
