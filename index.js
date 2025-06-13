@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const app = express();
 
 // Add error handling for uncaught exceptions
@@ -21,9 +22,7 @@ const CONSTANTS = {
     WAIT_TIMES: {
         PAGE_LOAD: 2000,
         ANSWER_BEFORE_SUBMIT: 2000,
-        ANSWER_SUBMIT: 1000,
         ANSWER_AFTER_SUBMIT: 2000,
-        NEXT_TASK: 3000
     },
     SELECTORS: {
         LOGIN: {
@@ -93,7 +92,7 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Utility to log and store logs
 function log(message) {
-    console.log(message);
+    // console.log(message);
     logs.push(`${new Date().toLocaleString()} - ${message}`);
     if (logs.length > 1000) logs.shift(); // prevent memory overflow
 }
@@ -126,6 +125,24 @@ app.use(express.static(path.join(__dirname)));
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/index.html'));
 });
+
+// Add screenshots endpoint
+app.get('/screenshots', (req, res) => {
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    try {
+        const files = fs.readdirSync(screenshotsDir);
+        const screenshots = files.filter(file => 
+            file.endsWith('.png') || file.endsWith('.jpg') || file.endsWith('.jpeg')
+        );
+        res.json({ screenshots });
+    } catch (error) {
+        console.error('Error reading screenshots directory:', error);
+        res.status(500).json({ error: 'Failed to read screenshots directory' });
+    }
+});
+
+// Serve screenshots directory
+app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
 
 // Add health check endpoint
 app.get('/health', (req, res) => {
@@ -639,6 +656,11 @@ app.get('/logs', (req, res) => {
     res.json({ logs });
 });
 
+app.post('/clear', (req, res) => {
+    logs = [];
+    res.json({ status: 'success' });
+});
+
 // API endpoint for stop
 app.post('/stop', async (req, res) => {
     try {
@@ -667,8 +689,9 @@ app.post('/stop', async (req, res) => {
 // Start the server with error handling
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
-    log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
 }).on('error', (error) => {
+    console.log(`Server failed to start: ${error}`);
     log(`Server failed to start: ${error}`);
     process.exit(1);
 });

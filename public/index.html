@@ -26,7 +26,7 @@
             background-color: white;
             padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
         h1 {
@@ -73,7 +73,7 @@
             border-color: #007bff;
         }
 
-        input:focus + i {
+        input:focus+i {
             color: #007bff;
         }
 
@@ -109,6 +109,110 @@
 
         #stopBtn:hover {
             background-color: #c82333;
+        }
+
+        #clearBtn {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        #clearBtn:hover {
+            background-color: #5a6268;
+        }
+
+        #screenshotBtn {
+            background-color: #17a2b8;
+            color: white;
+        }
+
+        #screenshotBtn:hover {
+            background-color: #138496;
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            position: relative;
+            background-color: #fff;
+            margin: 5% auto;
+            padding: 20px;
+            width: 80%;
+            max-width: 800px;
+            border-radius: 8px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .close-modal {
+            position: absolute;
+            right: 20px;
+            top: 10px;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .close-modal:hover {
+            color: #333;
+        }
+
+        .screenshot-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 20px 0;
+        }
+
+        .screenshot-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .screenshot-item img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .screenshot-item p {
+            margin-top: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .screenshot-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 2000;
+        }
+
+        .screenshot-modal img {
+            max-width: 90%;
+            max-height: 90vh;
+            margin: auto;
+            display: block;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }
 
         #logs {
@@ -164,8 +268,8 @@
 
 <body>
     <div class="container">
-        <!-- <h1>DTE Automation Control</h1> -->
-        
+        <h1>DTE Automation Control</h1>
+
         <div class="input-group">
             <div class="input-wrapper">
                 <input id="username" placeholder="Enter username" />
@@ -180,9 +284,25 @@
         <div class="button-group">
             <button id="startBtn" onclick="start()">Start</button>
             <button id="stopBtn" onclick="stop()">Stop</button>
+            <button id="clearBtn" onclick="clearLogs()">Clear Logs</button>
+            <button id="screenshotBtn" onclick="showScreenshots()">Screenshots</button>
         </div>
 
         <div id="logs"></div>
+    </div>
+
+    <!-- Screenshot Modal -->
+    <div id="screenshotModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeScreenshotModal()">&times;</span>
+            <h2>Screenshots</h2>
+            <div id="screenshotGrid" class="screenshot-grid"></div>
+        </div>
+    </div>
+
+    <!-- Full Image Modal -->
+    <div id="fullImageModal" class="screenshot-modal" onclick="closeFullImageModal()">
+        <img id="fullImage" src="" alt="Full screenshot">
     </div>
 
     <script>
@@ -235,6 +355,75 @@
                 logsElement.scrollTop = logsElement.scrollHeight;
             } catch (error) {
                 console.error('Error loading logs:', error);
+            }
+        }
+
+        async function clearLogs() {
+            try {
+                await fetch(`/clear`, { method: 'POST' });
+                const logsElement = document.getElementById('logs');
+                logsElement.innerText = '';
+            } catch (error) {
+                console.error('Error clearing logs:', error);
+            }
+        }
+
+        async function showScreenshots() {
+            try {
+                const res = await fetch('/screenshots');
+                const data = await res.json();
+                const modal = document.getElementById('screenshotModal');
+                const grid = document.getElementById('screenshotGrid');
+
+                grid.innerHTML = '';
+                data.screenshots.forEach(screenshot => {
+                    const item = document.createElement('div');
+                    item.className = 'screenshot-item';
+
+                    const img = document.createElement('img');
+                    img.src = `/screenshots/${screenshot}`;
+                    img.alt = screenshot;
+                    img.onclick = () => showFullImage(img.src);
+
+                    const name = document.createElement('p');
+                    name.textContent = screenshot;
+
+                    item.appendChild(img);
+                    item.appendChild(name);
+                    grid.appendChild(item);
+                });
+
+                modal.style.display = 'block';
+            } catch (error) {
+                console.error('Error loading screenshots:', error);
+                alert('Error loading screenshots');
+            }
+        }
+
+        function closeScreenshotModal() {
+            document.getElementById('screenshotModal').style.display = 'none';
+        }
+
+        function showFullImage(src) {
+            const modal = document.getElementById('fullImageModal');
+            const img = document.getElementById('fullImage');
+            img.src = src;
+            modal.style.display = 'block';
+        }
+
+        function closeFullImageModal() {
+            document.getElementById('fullImageModal').style.display = 'none';
+        }
+
+        // Close modals when clicking outside
+        window.onclick = function (event) {
+            const screenshotModal = document.getElementById('screenshotModal');
+            const fullImageModal = document.getElementById('fullImageModal');
+            if (event.target === screenshotModal) {
+                closeScreenshotModal();
+            }
+            if (event.target === fullImageModal) {
+                closeFullImageModal();
             }
         }
     </script>
