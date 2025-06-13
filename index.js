@@ -12,6 +12,10 @@ process.on('unhandledRejection', (error) => {
     console.error('Unhandled Rejection:', error);
 });
 
+let logs = [];
+let isRunning = false;
+let currentBrowser = null;  // Add this to track the current browser instance
+
 // Constants
 const CONSTANTS = {
     WAIT_TIMES: {
@@ -87,12 +91,19 @@ function validatePhoneNumber(phoneNumber) {
 // Utility functions
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Utility to log and store logs
+function log(message) {
+    console.log(message);
+    logs.push(`${new Date().toLocaleString()} - ${message}`);
+    if (logs.length > 1000) logs.shift(); // prevent memory overflow
+}
+
 async function takeScreenshot(page, filename) {
     try {
         await page.screenshot({ path: filename });
-        console.log(`Screenshot taken and saved as ${filename}`);
+        log(`Screenshot taken and saved as ${filename}`);
     } catch (error) {
-        console.error(`Failed to take screenshot ${filename}:`, error.message);
+        log(`Failed to take screenshot ${filename}: ${error.message}`);
     }
 }
 
@@ -101,7 +112,7 @@ async function waitForElement(page, selector, timeout = 30000) {
         await page.waitForSelector(selector, { visible: true, timeout });
         return true;
     } catch (error) {
-        console.error(`Element not found: ${selector}`, error.message);
+        log(`Element not found ${selector}: ${error.message}`);
         return false;
     }
 }
@@ -113,7 +124,7 @@ app.use(express.static(path.join(__dirname)));
 
 // Route handlers
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'login.html'));
+    res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 // Add health check endpoint
@@ -123,6 +134,8 @@ app.get('/health', (req, res) => {
 
 // Login automation function
 async function performTasks(phoneNumber, password) {
+    isRunning = true;
+    log('Starting automation');
     let browser;
     try {
         const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
@@ -144,36 +157,38 @@ async function performTasks(phoneNumber, password) {
                 PUPPETEER_CACHE_DIR: cachePath
             }
         });
+        currentBrowser = browser;  // Store the browser instance
         const page = await browser.newPage();
 
         // Set default timeout
         page.setDefaultTimeout(30000);
 
-        console.log('Starting login process');
+        log('Starting login process');
         await page.goto(CONSTANTS.URLS.LOGIN, { waitUntil: 'networkidle2' });
-        console.log('Navigated to login page');
+        log('Navigated to login page');
 
         // Fill login form
         await page.type(CONSTANTS.SELECTORS.LOGIN.PHONE, phoneNumber);
-        console.log('Entered phone number');
+        log('Entered phone number');
 
         await page.type(CONSTANTS.SELECTORS.LOGIN.PASSWORD, password);
-        console.log('Entered password');
+        log('Entered password');
 
         // Submit login
         await Promise.all([
             page.click(CONSTANTS.SELECTORS.LOGIN.SUBMIT),
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
         ]);
-        console.log('Clicked login button and waiting for navigation');
+        log('Clicked login button and waiting for navigation');
 
         // Wait for home page to load and take screenshot
-        console.log('Waiting 2 seconds for home page to load');
+        log('Waiting 2 seconds for home page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN);
-        console.log('Login process completed successfully');
+        log('Login process completed successfully');
 
         if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.TABBAR)) {
+            log('Task tabbar not found');
             throw new Error('Task tabbar not found');
         }
 
@@ -187,33 +202,39 @@ async function performTasks(phoneNumber, password) {
         });
 
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        console.log('Navigated to Task page');
+        log('Navigated to Task page');
 
-        console.log('Waiting 2 seconds for page to load');
+        log('Waiting 2 seconds for page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
-        console.log('Remaining tasks count:', remainingTasksCount);
+        log(`Remaining tasks count: ${remainingTasksCount}`);
 
         while (remainingTasksCount > 0) {
-            const result = await handleSingleTask(page);
+            const result = await handleSingleTask(page, remainingTasksCount);
             if (!result.success) {
+                log(result.message);
                 throw new Error(result.message);
             }
             // Update the count after each task
             remainingTasksCount = await getRemainingTasksCount(page);
-            console.log('Remaining tasks count:', remainingTasksCount);
+            log(`Remaining tasks count: ${remainingTasksCount}`);
         }
 
-        console.log('All today\'s tasks completed successfully');
+        log('All today\'s tasks completed successfully');
         await browser.close();
         return { success: true, message: 'All today\'s tasks completed successfully' };
-
     } catch (error) {
-        console.error('Error in performTasks:', error.message);
+        log(`Error in performTasks: ${error.message}`);
         if (browser) await browser.close();
         throw error;
+    } finally {
+        if (browser) {
+            await browser.close();
+            currentBrowser = null;
+        }
+        isRunning = false;
     }
 }
 
@@ -231,14 +252,14 @@ async function getRemainingTasksCount(page) {
         const count = match ? parseInt(match[1]) : 0;
         return count;
     } catch (error) {
-        console.error('Error getting remaining tasks count:', error.message);
+        log(`Error getting remaining tasks count: ${error.message}`);
         return 0;
     }
 }
 
 // Helper function to handle video watching
 async function handleVideoWatching(page) {
-    console.log('Starting video watching process');
+    log('Starting video watching process');
     let watchedSeconds = 0;
     let previousSeconds = 0;
     let stuckCount = 0;
@@ -248,7 +269,7 @@ async function handleVideoWatching(page) {
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         // Check if we've been stuck too long
         if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
-            console.log('Video watching timeout reached, attempting to restart video');
+            log('Video watching timeout reached, attempting to restart video');
             if (await restartVideo(page)) {
                 // Reset counters after successful restart
                 startTime = Date.now();
@@ -269,21 +290,21 @@ async function handleVideoWatching(page) {
             return 0;
         });
 
-        console.log('Currently watched seconds:', watchedSeconds);
+        log(`Currently watched seconds: ${watchedSeconds}`);
 
         // Check if seconds are stuck
         if (watchedSeconds === previousSeconds) {
             stuckCount++;
             // If we're stuck at 13 or 14 seconds, and it's been a few checks, consider the video complete
             if ((watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
-                console.log(`Video appears to be complete at ${watchedSeconds} seconds (shorter video)`);
+                log(`Video appears to be complete at ${watchedSeconds} seconds (shorter video)`);
                 return true;
             }
 
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
-                console.log('Video appears to be stuck, attempting to restart');
+                log('Video appears to be stuck, attempting to restart');
                 if (videoRestartAttempts >= CONSTANTS.VIDEO.MAX_RESTART_ATTEMPTS) {
-                    console.log('Maximum restart attempts reached');
+                    log('Maximum restart attempts reached');
                     return false;
                 }
 
@@ -309,7 +330,7 @@ async function handleVideoWatching(page) {
 
 // Helper function to restart video
 async function restartVideo(page) {
-    console.log('Attempting to restart video');
+    log('Attempting to restart video');
     try {
         // First try: Click the video element
         await page.evaluate(() => {
@@ -347,7 +368,7 @@ async function restartVideo(page) {
         });
 
         if (isPlaying) {
-            console.log('Video successfully restarted');
+            log('Video successfully restarted');
             return true;
         }
 
@@ -377,13 +398,13 @@ async function restartVideo(page) {
         return finalCheck;
 
     } catch (error) {
-        console.error('Error restarting video:', error.message);
+        log(`Error restarting video: ${error.message}`);
         return false;
     }
 }
 
 // Helper function to handle a single task
-async function handleSingleTask(page) {
+async function handleSingleTask(page, remainingTasksCount) {
     try {
         // Click first task
         const taskClicked = await page.evaluate(() => {
@@ -396,18 +417,19 @@ async function handleSingleTask(page) {
         });
 
         if (!taskClicked) {
+            log('No task items found to click');
             throw new Error('No task items found to click');
         }
-        console.log('Selected first task item');
+        log('Selected first task item');
 
         // Wait for task details page to load and take screenshot
-        console.log('Waiting 2 seconds for task details page to load');
+        log('Waiting 2 seconds for task details page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS);
-        console.log('Navigated to task details page');
+        log('Navigated to task details page');
 
         // Get advertisement text
-        console.log('Extracting advertisement text');
+        log('Extracting advertisement text');
         const adText = await page.evaluate(() => {
             const introDiv = Array.from(document.querySelectorAll('div[data-v-1d18d737]'))
                 .find(el => el.textContent.trim() === 'Advertising Introduction');
@@ -417,7 +439,7 @@ async function handleSingleTask(page) {
             }
             return '';
         });
-        console.log('Advertisement text:', adText);
+        log(`Advertisement text: ${adText}`);
 
         // Handle video playback with retry
         let videoSuccess = false;
@@ -427,6 +449,7 @@ async function handleSingleTask(page) {
         while (!videoSuccess && videoRetryCount < maxVideoRetries) {
             try {
                 if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
+                    log('Video element not found');
                     throw new Error('Video element not found');
                 }
 
@@ -442,20 +465,20 @@ async function handleSingleTask(page) {
                     return video && !video.paused;
                 });
 
-                console.log('Video started playing');
+                log('Video started playing');
                 await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING);
 
                 videoSuccess = await handleVideoWatching(page);
 
                 if (!videoSuccess) {
                     videoRetryCount++;
-                    console.log(`Video watching failed, attempt ${videoRetryCount}/${maxVideoRetries}`);
+                    log(`Video watching failed, attempt ${videoRetryCount}/${maxVideoRetries}`);
                     if (videoRetryCount < maxVideoRetries) {
                         await wait(1000);
                     }
                 }
             } catch (error) {
-                console.error('Error during video playback:', error.message);
+                log(`Error during video playback: ${error.message}`);
                 videoRetryCount++;
                 if (videoRetryCount < maxVideoRetries) {
                     await wait(1000);
@@ -464,30 +487,27 @@ async function handleSingleTask(page) {
         }
 
         if (!videoSuccess) {
+            log('Failed to watch video after multiple attempts');
             throw new Error('Failed to watch video after multiple attempts');
         }
 
         // Handle answer submission
         await handleAnswerSubmission(page, adText);
 
-        console.log('Waiting 2 seconds for page to load');
+        log('Waiting 2 seconds for page to load');
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
 
-        // Check remaining tasks
-        const remainingTasksCount = await getRemainingTasksCount(page);
-        console.log('Remaining tasks count:', remainingTasksCount);
-
-        if (remainingTasksCount > 0) {
+        if (remainingTasksCount > 1) {
             // Instead of recursive call, return to performTasks
             return { success: true, message: 'Task completed, more tasks available' };
         } else {
-            console.log('No remaining tasks for today');
+            log('No remaining tasks for today');
             return { success: true, message: 'All tasks completed successfully' };
         }
 
     } catch (error) {
-        console.error('Error in handleSingleTask:', error.message);
+        log(`Error in handleSingleTask: ${error.message}`);
         throw error;
     }
 }
@@ -503,7 +523,7 @@ async function handleAnswerSubmission(page, adText) {
             }
         });
 
-        console.log('Waiting 2 seconds for answer options to load and take screenshot');
+        log('Waiting 2 seconds for answer options to load and take screenshot');
         await wait(2000);
         await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS);
 
@@ -520,9 +540,9 @@ async function handleAnswerSubmission(page, adText) {
             const correctAnswer = answers.find(answer => adText.toLowerCase().includes(answer.toLowerCase()));
             return { answers, correctAnswer, adText };
         }, adText);
-        console.log('Advertisement text:', answerResult.adText);
-        console.log('Answer options:', answerResult.answers);
-        console.log('Correct answer:', answerResult.correctAnswer);
+        log(`Advertisement text: ${answerResult.adText}`);
+        log(`Answer options: ${answerResult.answers}`);
+        log(`Correct answer: ${answerResult.correctAnswer}`);
 
         if (answerResult.correctAnswer) {
             await page.evaluate((correctAnswer) => {
@@ -532,9 +552,9 @@ async function handleAnswerSubmission(page, adText) {
                     answerElement.click();
                 }
             }, answerResult.correctAnswer);
-            console.log('Selected correct answer');
+            log('Selected correct answer');
 
-            console.log('Waiting 2 second before submitting answer');
+            log('Waiting 2 second before submitting answer');
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_BEFORE_SUBMIT);
 
             // Submit answer
@@ -548,9 +568,9 @@ async function handleAnswerSubmission(page, adText) {
                     submitBtn.click()
                 }
             });
-            console.log('Answer Submitted');
+            log('Answer Submitted');
 
-            console.log('Waiting 2 seconds to confirm answer is correct and take screenshot');
+            log('Waiting 2 seconds to confirm answer is correct and take screenshot');
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_AFTER_SUBMIT);
             await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT);
 
@@ -565,29 +585,29 @@ async function handleAnswerSubmission(page, adText) {
                     backBtn.click();
                 }
             });
-            console.log('Clicked Back to next task button');
+            log('Clicked Back to next task button');
         } else {
             // If no match found, try to go back to task list
-            console.log('No matching answer found, attempting to go back to task list');
+            log('No matching answer found, attempting to go back to task list');
             await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
-            console.log('Waiting 2 seconds for page to load');
+            log('Waiting 2 seconds for page to load');
             await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            console.log('Successfully went back to task list using page.goBack()');
+            log('Successfully went back to task list using page.goBack()');
             await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK);
             return { success: true, message: 'Returned to task list due to no matching answer' };
         }
     } catch (error) {
-        console.error('Error in handleAnswerSubmission:', error.message);
+        log(`Error in handleAnswerSubmission: ${error.message}`);
         throw error;
     }
 }
 
 // API endpoint for login
-app.post('/login', async (req, res) => {
-    const { phoneNumber, password } = req.body;
+app.post('/start', async (req, res) => {
+    const { username, password } = req.body;
 
-    if (!phoneNumber || !password) {
-        console.error('Missing phone number or password');
+    if (!username || !password) {
+        log('Missing phone number or password');
         return res.status(400).json({
             success: false,
             message: 'Phone number and password are required'
@@ -595,40 +615,69 @@ app.post('/login', async (req, res) => {
     }
 
     // Validate phone number before proceeding
-    const phoneValidation = validatePhoneNumber(phoneNumber);
+    const phoneValidation = validatePhoneNumber(username);
     if (!phoneValidation.isValid) {
+        log('Invalid phone number');
         return res.status(400).json({
             success: false,
             message: phoneValidation.message
         });
     }
 
+    if (isRunning) {
+        log('Automation already running');
+        return res.status(400).json({ message: 'Automation already running' });
+    }
+
+    logs = [];
+    performTasks(username, password);
+    res.json({ message: 'Automation started' });
+
+});
+
+app.get('/logs', (req, res) => {
+    res.json({ logs });
+});
+
+// API endpoint for stop
+app.post('/stop', async (req, res) => {
     try {
-        const result = await performTasks(phoneNumber, password);
-        res.json(result);
+        if (!isRunning) {
+            return res.json({ message: 'No automation running' });
+        }
+
+        log('Stop command received');
+        isRunning = false;
+
+        // Close the browser if it exists
+        if (currentBrowser) {
+            log('Closing browser...');
+            await currentBrowser.close();
+            currentBrowser = null;
+            log('Browser closed successfully');
+        }
+
+        res.json({ message: 'Automation stopped successfully' });
     } catch (error) {
-        console.error('Server error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        log(`Error stopping automation: ${error.message}`);
+        res.status(500).json({ message: 'Error stopping automation', error: error.message });
     }
 });
 
 // Start the server with error handling
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    log(`Server is running on http://localhost:${PORT}`);
 }).on('error', (error) => {
-    console.error('Server failed to start:', error);
+    log(`Server failed to start: ${error}`);
     process.exit(1);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
+    log('SIGTERM received. Shutting down gracefully...');
     server.close(() => {
-        console.log('Server closed');
+        log('Server closed');
         process.exit(0);
     });
 });
