@@ -119,15 +119,19 @@ function log(message) {
         emoji = '⌨️';
     } else if (message.toLowerCase().includes('screenshot')) {
         emoji = '📸';
-    } else if (message.toLowerCase().includes('video')) {
-        emoji = '🎥';
+    } else if (message.toLowerCase().includes('video') || message.toLowerCase().includes('play') || message.toLowerCase().includes('watch')) {
+        emoji = '📺';
     } else if (message.toLowerCase().includes('task')) {
         emoji = '📋';
     } else if (message.toLowerCase().includes('answer')) {
         emoji = '✍️';
     }
 
-    logs.push(`${new Date().toLocaleString()} - ${emoji} ${message}`);
+    const now = new Date();
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const formattedTime = istTime.toISOString().replace('T', ' ').replace('Z', ' IST');
+    
+    logs.push(`${formattedTime} - ${emoji} ${message}`);
     if (logs.length > 1000) logs.shift(); // prevent memory overflow
 }
 
