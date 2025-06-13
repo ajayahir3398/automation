@@ -188,14 +188,14 @@ app.get('/health', (req, res) => {
 });
 
 // Login automation function
-async function performTasks(phoneNumber, password) {
+async function performTasks(phoneNumber, password, headless = true) {
     isRunning = true;
     log('Starting automation');
     let browser;
     try {
         const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
         browser = await puppeteer.launch({
-            headless: true,
+            headless: headless,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -614,7 +614,7 @@ async function handleAnswerSubmission(page, adText) {
 
 // API endpoint for login
 app.post('/start', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, headless = true } = req.body;
 
     if (!username || !password) {
         log('Missing phone number or password');
@@ -640,9 +640,8 @@ app.post('/start', async (req, res) => {
     }
 
     logs = [];
-    performTasks(username, password);
+    performTasks(username, password, headless);
     res.json({ message: 'Automation started' });
-
 });
 
 app.get('/logs', (req, res) => {

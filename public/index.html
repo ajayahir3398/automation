@@ -59,6 +59,24 @@
             color: #666;
         }
 
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .checkbox-wrapper input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            margin: 0;
+        }
+
+        .checkbox-wrapper label {
+            font-size: 14px;
+            color: #666;
+        }
+
         input {
             width: 100%;
             padding: 12px 12px 12px 40px;
@@ -280,6 +298,10 @@
                 <input id="password" type="password" placeholder="Enter password" />
                 <i class="fas fa-lock"></i>
             </div>
+            <div class="checkbox-wrapper">
+                <input type="checkbox" id="headless" checked />
+                <label for="headless">Run in headless mode (no browser window)</label>
+            </div>
         </div>
 
         <div class="button-group">
@@ -312,6 +334,7 @@
         async function start() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
+            const headless = document.getElementById('headless').checked;
 
             if (!username || !password) {
                 alert('Please enter both username and password');
@@ -322,7 +345,7 @@
                 const res = await fetch(`/start`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password }),
+                    body: JSON.stringify({ username, password, headless }),
                 });
 
                 if (!logInterval) {
