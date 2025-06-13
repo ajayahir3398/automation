@@ -332,6 +332,17 @@
         let logInterval = null;
         let currentPhoneNumber = null;
 
+        // Phone number validation function
+        function validatePhoneNumber(phoneNumber) {
+            // Remove any non-digit characters
+            const cleanedNumber = phoneNumber.replace(/\D/g, '');
+            
+            // Check if it's exactly 10 digits and starts with 1-9
+            const phonePattern = /^[1-9]\d{9}$/;
+            
+            return phonePattern.test(cleanedNumber);
+        }
+
         // Check for existing sessions when page loads
         window.addEventListener('load', function() {
             checkForExistingSessions();
@@ -340,7 +351,7 @@
         // Check for existing sessions when username field changes
         document.getElementById('username').addEventListener('input', function() {
             const phoneNumber = this.value.trim();
-            if (phoneNumber) {
+            if (phoneNumber && validatePhoneNumber(phoneNumber)) {
                 checkForExistingSessions(phoneNumber);
             }
         });
@@ -350,7 +361,9 @@
             const usernameField = document.getElementById('username');
             const phoneToCheck = phoneNumber || usernameField.value.trim();
             
-            if (!phoneToCheck) return;
+            if (!phoneToCheck || !validatePhoneNumber(phoneToCheck)) {
+                return false;
+            }
 
             try {
                 // First check session status directly
@@ -406,17 +419,6 @@
             const startBtn = document.getElementById('startBtn');
             const stopBtn = document.getElementById('stopBtn');
             
-            if (currentPhoneNumber) {
-                startBtn.textContent = 'Restart';
-                startBtn.style.backgroundColor = '#ffc107';
-                startBtn.style.color = '#000';
-                stopBtn.disabled = false;
-            } else {
-                startBtn.textContent = 'Start';
-                startBtn.style.backgroundColor = '#28a745';
-                startBtn.style.color = '#fff';
-                stopBtn.disabled = true;
-            }
         }
 
         async function start() {
@@ -448,7 +450,7 @@
                     if (data.message && data.message.includes('already have an automation running')) {
                         const reconnected = await checkForExistingSessions(username);
                         if (reconnected) {
-                            alert('Reconnected to existing session! You can now view logs and screenshots.');
+                            alert('You already have an automation running, You can view existing session logs and screenshots.');
                         } else {
                             alert('Session exists but cannot be reconnected. Please try stopping and starting again.');
                         }
