@@ -308,7 +308,7 @@
             <button id="startBtn" onclick="start()">Start</button>
             <button id="stopBtn" onclick="stop()">Stop</button>
             <button id="clearBtn" onclick="clearLogs()">Clear Logs</button>
-            <button id="screenshotBtn" onclick="showScreenshots()">Screenshots</button>
+            <button id="screenshotBtn" onclick="showScreenshots()">View Screenshots</button>
         </div>
 
         <div id="logs"></div>
@@ -330,7 +330,94 @@
 
     <script>
         let logInterval = null;
-        let currentSessionId = null;
+        let currentPhoneNumber = null;
+
+        // Check for existing sessions when page loads
+        window.addEventListener('load', function() {
+            checkForExistingSessions();
+        });
+
+        // Check for existing sessions when username field changes
+        document.getElementById('username').addEventListener('input', function() {
+            const phoneNumber = this.value.trim();
+            if (phoneNumber) {
+                checkForExistingSessions(phoneNumber);
+            }
+        });
+
+        // Function to check for existing sessions
+        async function checkForExistingSessions(phoneNumber = null) {
+            const usernameField = document.getElementById('username');
+            const phoneToCheck = phoneNumber || usernameField.value.trim();
+            
+            if (!phoneToCheck) return;
+
+            try {
+                // First check session status directly
+                const statusRes = await fetch(`/session/status/${phoneToCheck}`);
+                const statusData = await statusRes.json();
+                
+                if (statusData.success && statusData.hasLogs) {
+                    // Session exists and has logs, reconnect to it
+                    currentPhoneNumber = phoneToCheck;
+                    if (!logInterval) {
+                        logInterval = setInterval(loadLogs, 1000);
+                    }
+                    
+                    // Update UI to show session is active
+                    updateUIForActiveSession();
+                    
+                    console.log(`Reconnected to existing session for ${phoneToCheck}`);
+                    return true;
+                }
+                
+                // Fallback: check screenshots if no active session but screenshots exist
+                const screenshotRes = await fetch(`/screenshots/${phoneToCheck}`);
+                const screenshotData = await screenshotRes.json();
+                
+                if (screenshotData.success && screenshotData.screenshots.length > 0) {
+                    // Screenshots exist, check if session is still active
+                    const logRes = await fetch(`/logs/phone/${phoneToCheck}`);
+                    const logData = await logRes.json();
+                    
+                    if (logData.success && logData.logs && logData.logs.length > 0) {
+                        // Session exists and has logs, reconnect to it
+                        currentPhoneNumber = phoneToCheck;
+                        if (!logInterval) {
+                            logInterval = setInterval(loadLogs, 1000);
+                        }
+                        
+                        // Update UI to show session is active
+                        updateUIForActiveSession();
+                        
+                        console.log(`Reconnected to existing session for ${phoneToCheck}`);
+                        return true;
+                    }
+                }
+            } catch (error) {
+                console.log('No existing session found or error checking:', error);
+            }
+            
+            return false;
+        }
+
+        // Function to update UI when session is active
+        function updateUIForActiveSession() {
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            
+            if (currentPhoneNumber) {
+                startBtn.textContent = 'Restart';
+                startBtn.style.backgroundColor = '#ffc107';
+                startBtn.style.color = '#000';
+                stopBtn.disabled = false;
+            } else {
+                startBtn.textContent = 'Start';
+                startBtn.style.backgroundColor = '#28a745';
+                startBtn.style.color = '#fff';
+                stopBtn.disabled = true;
+            }
+        }
 
         async function start() {
             const username = document.getElementById('username').value;
@@ -351,12 +438,23 @@
 
                 const data = await res.json();
                 if (data.success) {
-                    currentSessionId = data.sessionId;
+                    currentPhoneNumber = username;
                     if (!logInterval) {
                         logInterval = setInterval(loadLogs, 1000);
                     }
+                    updateUIForActiveSession();
                 } else {
-                    alert(data.message || 'Failed to start automation');
+                    // If "already running" error, try to reconnect to existing session
+                    if (data.message && data.message.includes('already have an automation running')) {
+                        const reconnected = await checkForExistingSessions(username);
+                        if (reconnected) {
+                            alert('Reconnected to existing session! You can now view logs and screenshots.');
+                        } else {
+                            alert('Session exists but cannot be reconnected. Please try stopping and starting again.');
+                        }
+                    } else {
+                        alert(data.message || 'Failed to start automation');
+                    }
                 }
             } catch (error) {
                 console.error(error);
@@ -365,20 +463,31 @@
         }
 
         async function stop() {
-            if (!currentSessionId) {
-                alert('No active session');
-                return;
+            if (!currentPhoneNumber) {
+                // Try to detect current session from input field
+                const username = document.getElementById('username').value;
+                if (username) {
+                    const reconnected = await checkForExistingSessions(username);
+                    if (!reconnected) {
+                        alert('No active session found');
+                        return;
+                    }
+                } else {
+                    alert('No active session');
+                    return;
+                }
             }
 
             try {
-                const res = await fetch(`/stop/${currentSessionId}`, { method: 'POST' });
+                const res = await fetch(`/stop/phone/${currentPhoneNumber}`, { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
                     if (logInterval) {
                         clearInterval(logInterval);
                         logInterval = null;
                     }
-                    currentSessionId = null;
+                    currentPhoneNumber = null;
+                    updateUIForActiveSession();
                 } else {
                     alert(data.message || 'Failed to stop automation');
                 }
@@ -389,13 +498,13 @@
         }
 
         async function loadLogs() {
-            if (!currentSessionId) {
+            if (!currentPhoneNumber) {
                 console.log('No active session');
                 return;
             }
 
             try {
-                const res = await fetch(`/logs/${currentSessionId}`);
+                const res = await fetch(`/logs/phone/${currentPhoneNumber}`);
                 if (!res.ok) {
                     throw new Error(`HTTP error! status: ${res.status}`);
                 }
@@ -430,15 +539,25 @@
         }
 
         async function clearLogs() {
-            if (!currentSessionId) {
-                alert('No active session');
-                return;
+            if (!currentPhoneNumber) {
+                // Try to detect current session from input field
+                const username = document.getElementById('username').value;
+                if (username) {
+                    const reconnected = await checkForExistingSessions(username);
+                    if (!reconnected) {
+                        alert('No active session');
+                        return;
+                    }
+                } else {
+                    alert('No active session');
+                    return;
+                }
             }
 
             try {
-                const res = await fetch(`/clear/${currentSessionId}`, { method: 'POST' });
+                const res = await fetch(`/clear/phone/${currentPhoneNumber}`, { method: 'POST' });
                 const data = await res.json();
-                if (data.success) {
+                if (data.status === 'success') {
                     const logsElement = document.getElementById('logs');
                     logsElement.innerText = '';
                 } else {
@@ -450,35 +569,47 @@
         }
 
         async function showScreenshots() {
-            if (!currentSessionId) {
-                alert('No active session');
+            const phoneNumber = document.getElementById('username').value;
+            
+            if (!phoneNumber) {
+                alert('Please enter a phone number to view screenshots');
                 return;
             }
 
             try {
-                const res = await fetch(`/screenshots/${currentSessionId}`);
+                const res = await fetch(`/screenshots/${phoneNumber}`);
                 const data = await res.json();
                 if (data.success) {
                     const modal = document.getElementById('screenshotModal');
                     const grid = document.getElementById('screenshotGrid');
 
                     grid.innerHTML = '';
-                    data.screenshots.forEach(screenshot => {
-                        const item = document.createElement('div');
-                        item.className = 'screenshot-item';
+                    
+                    if (data.screenshots.length === 0) {
+                        const noScreenshots = document.createElement('div');
+                        noScreenshots.style.textAlign = 'center';
+                        noScreenshots.style.padding = '40px';
+                        noScreenshots.style.color = '#666';
+                        noScreenshots.innerHTML = '<i class="fas fa-images" style="font-size: 48px; margin-bottom: 20px; display: block;"></i><p>No screenshots found for this phone number</p>';
+                        grid.appendChild(noScreenshots);
+                    } else {
+                        data.screenshots.forEach(screenshot => {
+                            const item = document.createElement('div');
+                            item.className = 'screenshot-item';
 
-                        const img = document.createElement('img');
-                        img.src = `/screenshots/${currentSessionId}/${screenshot}`;
-                        img.alt = screenshot;
-                        img.onclick = () => showFullImage(img.src);
+                            const img = document.createElement('img');
+                            img.src = `/screenshots/${phoneNumber}/${screenshot}`;
+                            img.alt = screenshot;
+                            img.onclick = () => showFullImage(img.src);
 
-                        const name = document.createElement('p');
-                        name.textContent = screenshot;
+                            const name = document.createElement('p');
+                            name.textContent = screenshot;
 
-                        item.appendChild(img);
-                        item.appendChild(name);
-                        grid.appendChild(item);
-                    });
+                            item.appendChild(img);
+                            item.appendChild(name);
+                            grid.appendChild(item);
+                        });
+                    }
 
                     modal.style.display = 'block';
                 } else {
