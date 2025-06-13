@@ -351,8 +351,19 @@
                 const res = await fetch(`/logs`);
                 const data = await res.json();
                 const logsElement = document.getElementById('logs');
+                
+                // Check if we're at the bottom before updating
+                const isAtBottom = Math.abs(logsElement.scrollHeight - logsElement.scrollTop - logsElement.clientHeight) < 10;
+                
+                // Update the content
                 logsElement.innerText = data.logs.join('\n');
-                logsElement.scrollTop = logsElement.scrollHeight;
+                
+                // Only scroll if we were at the bottom
+                if (isAtBottom) {
+                    setTimeout(() => {
+                        logsElement.scrollTop = logsElement.scrollHeight;
+                    }, 0);
+                }
             } catch (error) {
                 console.error('Error loading logs:', error);
             }
