@@ -194,8 +194,13 @@ async function performTasks(phoneNumber, password, headless = true) {
     let browser;
     try {
         const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
-        browser = await puppeteer.launch({
-            headless: headless,
+        
+        // Force headless mode in production/mobile environments
+        const isProduction = process.env.NODE_ENV === 'production';
+        const finalHeadless = isProduction ? true : headless;
+        
+        const launchOptions = {
+            headless: finalHeadless,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -211,7 +216,22 @@ async function performTasks(phoneNumber, password, headless = true) {
                 ...process.env,
                 PUPPETEER_CACHE_DIR: cachePath
             }
-        });
+        };
+
+        try {
+            browser = await puppeteer.launch(launchOptions);
+        } catch (error) {
+            log(`Browser launch failed: ${error.message}`);
+            // If non-headless fails, try headless mode
+            if (!finalHeadless) {
+                log('Retrying in headless mode');
+                launchOptions.headless = true;
+                browser = await puppeteer.launch(launchOptions);
+            } else {
+                throw error;
+            }
+        }
+
         currentBrowser = browser;
         const page = await browser.newPage();
         page.setDefaultTimeout(30000);
@@ -636,12 +656,26 @@ app.post('/start', async (req, res) => {
 
     if (isRunning) {
         log('Automation already running');
-        return res.status(400).json({ message: 'Automation already running' });
+        return res.status(400).json({ 
+            success: false,
+            message: 'Automation already running' 
+        });
     }
 
-    logs = [];
-    performTasks(username, password, headless);
-    res.json({ message: 'Automation started' });
+    try {
+        logs = [];
+        performTasks(username, password, headless);
+        res.json({ 
+            success: true,
+            message: 'Automation started' 
+        });
+    } catch (error) {
+        log(`Start error: ${error.message}`);
+        res.status(500).json({ 
+            success: false,
+            message: `Failed to start automation: ${error.message}`
+        });
+    }
 });
 
 app.get('/logs', (req, res) => {
