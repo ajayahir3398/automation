@@ -129,6 +129,21 @@
             background-color: #c82333;
         }
 
+        #toggleBtn {
+            background-color: #28a745;
+            color: white;
+            transition: background-color 0.3s ease;
+        }
+
+        #toggleBtn:hover {
+            background-color: #218838;
+        }
+
+        #toggleBtn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         #clearBtn {
             background-color: #6c757d;
             color: white;
@@ -305,10 +320,13 @@
         </div>
 
         <div class="button-group">
-            <button id="startBtn" onclick="start()">Start</button>
-            <button id="stopBtn" onclick="stop()">Stop</button>
+            <button id="toggleBtn" onclick="toggleAutomation()">Start</button>
             <button id="clearBtn" onclick="clearLogs()">Clear Logs</button>
             <button id="screenshotBtn" onclick="showScreenshots()">View Screenshots</button>
+        </div>
+
+        <div id="queueStatus" style="display: none; margin-bottom: 15px; padding: 10px; background-color: #e3f2fd; border-radius: 5px; text-align: center;">
+            <span id="queueMessage"></span>
         </div>
 
         <div id="logs"></div>
@@ -331,6 +349,27 @@
     <script>
         let logInterval = null;
         let currentPhoneNumber = null;
+        let isCleaningUp = false; // Flag to prevent multiple cleanup attempts
+
+        // Function to stop polling and cleanup
+        function stopPollingAndCleanup() {
+            if (isCleaningUp) return; // Prevent multiple cleanup attempts
+            isCleaningUp = true;
+            
+            console.log('Stopping log polling and cleaning up');
+            if (logInterval) {
+                clearInterval(logInterval);
+                logInterval = null;
+            }
+            currentPhoneNumber = null;
+            updateUIForActiveSession();
+            hideQueueStatus();
+            
+            // Reset cleanup flag after a delay
+            setTimeout(() => {
+                isCleaningUp = false;
+            }, 5000);
+        }
 
         // Phone number validation function
         function validatePhoneNumber(phoneNumber) {
@@ -374,7 +413,7 @@
                     // Session exists and has logs, reconnect to it
                     currentPhoneNumber = phoneToCheck;
                     if (!logInterval) {
-                        logInterval = setInterval(loadLogs, 1000);
+                        logInterval = setInterval(loadLogs, 2000);
                     }
                     
                     // Update UI to show session is active
@@ -397,7 +436,7 @@
                         // Session exists and has logs, reconnect to it
                         currentPhoneNumber = phoneToCheck;
                         if (!logInterval) {
-                            logInterval = setInterval(loadLogs, 1000);
+                            logInterval = setInterval(loadLogs, 2000);
                         }
                         
                         // Update UI to show session is active
@@ -416,12 +455,49 @@
 
         // Function to update UI when session is active
         function updateUIForActiveSession() {
-            const startBtn = document.getElementById('startBtn');
-            const stopBtn = document.getElementById('stopBtn');
+            const toggleBtn = document.getElementById('toggleBtn');
             
+            if (currentPhoneNumber) {
+                toggleBtn.textContent = 'Stop';
+                toggleBtn.style.backgroundColor = '#dc3545';
+                toggleBtn.style.color = '#fff';
+            } else {
+                toggleBtn.textContent = 'Start';
+                toggleBtn.style.backgroundColor = '#28a745';
+                toggleBtn.style.color = '#fff';
+            }
         }
 
-        async function start() {
+        // Main toggle function for start/stop
+        async function toggleAutomation() {
+            const toggleBtn = document.getElementById('toggleBtn');
+            
+            // Prevent multiple clicks
+            if (toggleBtn.disabled) {
+                return;
+            }
+            
+            const originalText = toggleBtn.textContent;
+            toggleBtn.disabled = true;
+            toggleBtn.textContent = 'Processing...';
+            
+            try {
+                if (currentPhoneNumber) {
+                    // Currently running - stop it
+                    await stopAutomation();
+                } else {
+                    // Not running - start it
+                    await startAutomation();
+                }
+            } catch (error) {
+                console.error('Toggle error:', error);
+            } finally {
+                toggleBtn.disabled = false;
+                updateUIForActiveSession(); // Restore proper button state
+            }
+        }
+
+        async function startAutomation() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const headless = document.getElementById('headless').checked;
@@ -440,11 +516,22 @@
 
                 const data = await res.json();
                 if (data.success) {
-                    currentPhoneNumber = username;
-                    if (!logInterval) {
-                        logInterval = setInterval(loadLogs, 1000);
+                    if (data.queued) {
+                        // Session is queued
+                        showQueueStatus(data.message);
+                        currentPhoneNumber = username;
+                        if (!logInterval) {
+                            logInterval = setInterval(loadLogs, 2000);
+                        }
+                    } else {
+                        // Session started immediately
+                        currentPhoneNumber = username;
+                        if (!logInterval) {
+                            logInterval = setInterval(loadLogs, 2000);
+                        }
+                        updateUIForActiveSession();
+                        hideQueueStatus();
                     }
-                    updateUIForActiveSession();
                 } else {
                     // If "already running" error, try to reconnect to existing session
                     if (data.message && data.message.includes('already have an automation running')) {
@@ -464,7 +551,7 @@
             }
         }
 
-        async function stop() {
+        async function stopAutomation() {
             if (!currentPhoneNumber) {
                 // Try to detect current session from input field
                 const username = document.getElementById('username').value;
@@ -484,12 +571,7 @@
                 const res = await fetch(`/stop/phone/${currentPhoneNumber}`, { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
-                    if (logInterval) {
-                        clearInterval(logInterval);
-                        logInterval = null;
-                    }
-                    currentPhoneNumber = null;
-                    updateUIForActiveSession();
+                    stopPollingAndCleanup();
                 } else {
                     alert(data.message || 'Failed to stop automation');
                 }
@@ -500,14 +582,19 @@
         }
 
         async function loadLogs() {
-            if (!currentPhoneNumber) {
-                console.log('No active session');
+            if (!currentPhoneNumber || isCleaningUp) {
+                console.log('No active session or cleanup in progress');
                 return;
             }
 
             try {
                 const res = await fetch(`/logs/phone/${currentPhoneNumber}`);
                 if (!res.ok) {
+                    if (res.status === 404) {
+                        console.log('Session not found (404) - automation completed, stopping polling');
+                        stopPollingAndCleanup();
+                        return;
+                    }
                     throw new Error(`HTTP error! status: ${res.status}`);
                 }
                 const data = await res.json();
@@ -532,11 +619,44 @@
                             logsElement.scrollTop = logsElement.scrollHeight;
                         }, 0);
                     }
+
+                    // Check if session has started (has logs) and hide queue status
+                    if (data.logs && data.logs.length > 0) {
+                        const lastLog = data.logs[data.logs.length - 1];
+                        if (lastLog.includes('Starting automation') || lastLog.includes('Login started')) {
+                            hideQueueStatus();
+                            updateUIForActiveSession();
+                        }
+                        
+                        // Check if automation completed successfully - stop polling immediately
+                        if (lastLog.includes('All tasks completed successfully') || lastLog.includes('All tasks done') || lastLog.includes('Cleanup completed successfully')) {
+                            console.log('Automation completed successfully, stopping log polling immediately');
+                            stopPollingAndCleanup();
+                            return; // Exit early to prevent further processing
+                        }
+                    }
                 } else {
                     console.error('Invalid logs data:', data);
                 }
             } catch (error) {
                 console.error('Error loading logs:', error);
+                
+                // If session not found and we have logs, automation might have completed
+                if (error.message.includes('404') || error.message.includes('Session not found')) {
+                    console.log('Session not found - automation may have completed');
+                    
+                    // Check if we have any logs to determine if it completed successfully
+                    const logsElement = document.getElementById('logs');
+                    if (logsElement && logsElement.innerText) {
+                        const logs = logsElement.innerText.split('\n');
+                        const lastLog = logs[logs.length - 1];
+                        
+                        if (lastLog.includes('All tasks completed successfully') || lastLog.includes('All tasks done') || lastLog.includes('Cleanup completed successfully')) {
+                            console.log('Automation completed successfully, cleaning up');
+                            stopPollingAndCleanup();
+                        }
+                    }
+                }
             }
         }
 
@@ -551,8 +671,8 @@
                         return;
                     }
                 } else {
-                    alert('No active session');
-                    return;
+                alert('No active session');
+                return;
                 }
             }
 
@@ -595,22 +715,22 @@
                         noScreenshots.innerHTML = '<i class="fas fa-images" style="font-size: 48px; margin-bottom: 20px; display: block;"></i><p>No screenshots found for this phone number</p>';
                         grid.appendChild(noScreenshots);
                     } else {
-                        data.screenshots.forEach(screenshot => {
-                            const item = document.createElement('div');
-                            item.className = 'screenshot-item';
+                    data.screenshots.forEach(screenshot => {
+                        const item = document.createElement('div');
+                        item.className = 'screenshot-item';
 
-                            const img = document.createElement('img');
+                        const img = document.createElement('img');
                             img.src = `/screenshots/${phoneNumber}/${screenshot}`;
-                            img.alt = screenshot;
-                            img.onclick = () => showFullImage(img.src);
+                        img.alt = screenshot;
+                        img.onclick = () => showFullImage(img.src);
 
-                            const name = document.createElement('p');
-                            name.textContent = screenshot;
+                        const name = document.createElement('p');
+                        name.textContent = screenshot;
 
-                            item.appendChild(img);
-                            item.appendChild(name);
-                            grid.appendChild(item);
-                        });
+                        item.appendChild(img);
+                        item.appendChild(name);
+                        grid.appendChild(item);
+                    });
                     }
 
                     modal.style.display = 'block';
@@ -648,6 +768,20 @@
             if (event.target === fullImageModal) {
                 closeFullImageModal();
             }
+        }
+
+        // Function to show queue status
+        function showQueueStatus(message) {
+            const queueStatus = document.getElementById('queueStatus');
+            const queueMessage = document.getElementById('queueMessage');
+            queueMessage.textContent = message;
+            queueStatus.style.display = 'block';
+        }
+
+        // Function to hide queue status
+        function hideQueueStatus() {
+            const queueStatus = document.getElementById('queueStatus');
+            queueStatus.style.display = 'none';
         }
     </script>
 

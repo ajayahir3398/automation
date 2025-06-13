@@ -17,6 +17,12 @@ process.on('unhandledRejection', (error) => {
 const sessions = new Map(); // phoneNumber -> session
 const sessionIds = new Map(); // sessionId -> phoneNumber (for reverse lookup)
 
+// Parallel session management
+const MAX_CONCURRENT_SESSIONS = 3; // Limit concurrent sessions
+const SESSION_QUEUE = []; // Queue for pending sessions
+let activeSessionCount = 0;
+let activeSessions = new Set(); // Track active session IDs to prevent double counting
+
 class AutomationSession {
     constructor(phoneNumber) {
         this.id = Date.now().toString();
@@ -24,6 +30,10 @@ class AutomationSession {
         this.isRunning = false;
         this.browser = null;
         this.phoneNumber = phoneNumber;
+        this.startTime = null;
+        this.retryCount = 0;
+        this.maxRetries = 2;
+        this.isActiveSession = false; // Track if this session is counted in activeSessionCount
     }
 
     log(message) {
@@ -125,8 +135,44 @@ function storeSession(session) {
 }
 
 function removeSession(session) {
+    console.log(`Removing session for ${session.phoneNumber}, isRunning: ${session.isRunning}, isActiveSession: ${session.isActiveSession}, activeSessionCount: ${activeSessionCount}`);
     sessions.delete(session.phoneNumber);
     sessionIds.delete(session.id);
+    
+    // Only decrement if this session was actually counted as active
+    if (session.isActiveSession) {
+        activeSessions.delete(session.id);
+        activeSessionCount = activeSessions.size;
+        session.isActiveSession = false;
+        console.log(`Session removed, activeSessionCount now: ${activeSessionCount}`);
+        processNextSession();
+    }
+}
+
+// Function to manually remove session (for stop button)
+function removeSessionManually(session) {
+    console.log(`Manually removing session for ${session.phoneNumber}, isActiveSession: ${session.isActiveSession}, activeSessionCount: ${activeSessionCount}`);
+    sessions.delete(session.phoneNumber);
+    sessionIds.delete(session.id);
+    
+    // Always decrement count for manual stops if it was an active session
+    if (session.isActiveSession) {
+        activeSessions.delete(session.id);
+        activeSessionCount = activeSessions.size;
+        session.isActiveSession = false;
+        console.log(`Session manually removed, activeSessionCount now: ${activeSessionCount}`);
+        processNextSession();
+    }
+}
+
+// Function to mark session as active
+function markSessionAsActive(session) {
+    if (!session.isActiveSession) {
+        session.isActiveSession = true;
+        activeSessions.add(session.id);
+        activeSessionCount = activeSessions.size;
+        console.log(`Session ${session.id} marked as active, activeSessionCount: ${activeSessionCount}`);
+    }
 }
 
 // Utility functions for screenshot management
@@ -266,8 +312,8 @@ app.get('/screenshots/:phoneNumber', (req, res) => {
     try {
         // Check if directory exists
         if (!fs.existsSync(screenshotsDir)) {
-            return res.status(404).json({ 
-                success: false,
+        return res.status(404).json({ 
+            success: false,
                 message: 'No screenshots found for this phone number' 
             });
         }
@@ -309,11 +355,26 @@ app.get('/health', (req, res) => {
 async function performTasks(session, phoneNumber, password) {
     try {
         const page = await session.browser.newPage();
-        page.setDefaultTimeout(30000);
+        
+        // Set longer timeout for parallel sessions
+        const timeout = activeSessionCount > 1 ? 60000 : 30000;
+        page.setDefaultTimeout(timeout);
+        
+        // Set viewport and user agent for better performance
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         session.log('Login started');
-        await page.goto(CONSTANTS.URLS.LOGIN, { waitUntil: 'networkidle2' });
+        
+        // Use more reliable navigation options
+        await page.goto(CONSTANTS.URLS.LOGIN, { 
+            waitUntil: 'domcontentloaded',
+            timeout: timeout 
+        });
         session.log('Login page loaded');
+
+        // Wait a bit for page to fully load
+        await wait(2000);
 
         await page.type(CONSTANTS.SELECTORS.LOGIN.PHONE, phoneNumber);
         session.log('Phone entered');
@@ -321,10 +382,12 @@ async function performTasks(session, phoneNumber, password) {
         await page.type(CONSTANTS.SELECTORS.LOGIN.PASSWORD, password);
         session.log('Password entered');
 
-        await Promise.all([
-            page.click(CONSTANTS.SELECTORS.LOGIN.SUBMIT),
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-        ]);
+        // Use more reliable navigation for login
+        await page.click(CONSTANTS.SELECTORS.LOGIN.SUBMIT);
+        await page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: timeout 
+        });
         session.log('Login submitted');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
@@ -344,7 +407,10 @@ async function performTasks(session, phoneNumber, password) {
             }
         });
 
-        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+        await page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: timeout 
+        });
         session.log('Task page loaded');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
@@ -700,6 +766,166 @@ async function handleAnswerSubmission(page, adText, session) {
     }
 }
 
+// Session queue management
+function addToQueue(session, phoneNumber, password, headless) {
+    console.log(`Adding session ${session.id} to queue for ${phoneNumber}, activeSessionCount: ${activeSessionCount}`);
+    SESSION_QUEUE.push({ session, phoneNumber, password, headless });
+    session.log('Added to queue - waiting for available slot');
+    processNextSession();
+}
+
+function processNextSession() {
+    console.log(`Processing queue: ${SESSION_QUEUE.length} items, activeSessionCount: ${activeSessionCount}, max: ${MAX_CONCURRENT_SESSIONS}`);
+    if (SESSION_QUEUE.length > 0 && activeSessionCount < MAX_CONCURRENT_SESSIONS) {
+        const { session, phoneNumber, password, headless } = SESSION_QUEUE.shift();
+        markSessionAsActive(session);
+        console.log(`Starting queued session for ${phoneNumber}, activeSessionCount: ${activeSessionCount}`);
+        session.log('Starting from queue');
+        startSession(session, phoneNumber, password, headless);
+    }
+}
+
+async function startSession(session, phoneNumber, password, headless) {
+    try {
+        session.startTime = Date.now();
+        session.log('Starting automation');
+        session.isRunning = true;
+        
+        // Mark session as active before starting
+        markSessionAsActive(session);
+        
+        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
+        const launchOptions = {
+            headless: headless,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-field-trial-config',
+                '--disable-ipc-flooding-protection',
+                '--memory-pressure-off',
+                '--max_old_space_size=4096',
+                '--window-size=1920x1080'
+            ],
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            cacheDirectory: cachePath,
+            ignoreDefaultArgs: ['--disable-extensions'],
+            env: {
+                ...process.env,
+                PUPPETEER_CACHE_DIR: cachePath
+            }
+        };
+
+        try {
+            session.browser = await puppeteer.launch(launchOptions);
+        } catch (error) {
+            session.log(`Browser launch failed: ${error.message}`);
+            if (!headless) {
+                session.log('Retrying in headless mode');
+                launchOptions.headless = true;
+                session.browser = await puppeteer.launch(launchOptions);
+            } else {
+                throw error;
+            }
+        }
+
+        // Start automation in background with retry logic
+        performTasksWithRetry(session, phoneNumber, password);
+
+    } catch (error) {
+        session.log(`Start error: ${error.message}`);
+        session.stop();
+        removeSession(session);
+        throw error;
+    }
+}
+
+// Function to handle successful automation completion
+async function handleSuccessfulCompletion(session, phoneNumber) {
+    try {
+        session.log('Automation completed successfully - starting cleanup');
+        
+        // Delete screenshots for successful completion
+        await deleteScreenshotsForPhone(phoneNumber);
+        session.log('Screenshots deleted for successful completion');
+        
+        // Stop the session
+        session.stop();
+        
+        // Wait a bit before removing session to allow frontend to get final logs
+        await wait(3000);
+        
+        // Remove session from tracking
+        removeSession(session);
+        
+        session.log('Cleanup completed successfully');
+    } catch (error) {
+        session.log(`Error during cleanup: ${error.message}`);
+        // Still try to remove session even if cleanup fails
+        removeSession(session);
+    }
+}
+
+async function performTasksWithRetry(session, phoneNumber, password) {
+    try {
+        await performTasks(session, phoneNumber, password);
+        // Tasks completed successfully - use comprehensive cleanup
+        session.log('All tasks completed successfully');
+        await handleSuccessfulCompletion(session, phoneNumber);
+    } catch (error) {
+        session.log(`Automation error: ${error.message}`);
+        
+        // Retry logic for navigation timeouts
+        if (error.message.includes('Navigation timeout') && session.retryCount < session.maxRetries) {
+            session.retryCount++;
+            session.log(`Retrying automation (attempt ${session.retryCount}/${session.maxRetries})`);
+            
+            // Wait before retry
+            await wait(5000 * session.retryCount);
+            
+            // Restart the session
+            try {
+                if (session.browser) {
+                    await session.browser.close();
+                    session.browser = null;
+                }
+                session.browser = await puppeteer.launch({
+                    headless: true,
+                    args: [
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--memory-pressure-off',
+                        '--max_old_space_size=4096'
+                    ]
+                });
+                
+                await performTasks(session, phoneNumber, password);
+                // Tasks completed successfully after retry - use comprehensive cleanup
+                session.log('All tasks completed successfully after retry');
+                await handleSuccessfulCompletion(session, phoneNumber);
+            } catch (retryError) {
+                session.log(`Retry failed: ${retryError.message}`);
+                session.stop();
+                removeSession(session);
+            }
+        } else {
+            // No more retries or different error - clean up session
+            session.log('Automation failed - cleaning up session');
+            session.stop();
+            removeSession(session);
+        }
+    }
+}
+
 // API endpoint for login
 app.post('/start', async (req, res) => {
     const { username, password, headless = true } = req.body;
@@ -732,62 +958,38 @@ app.post('/start', async (req, res) => {
     // If session exists but not running, reuse it
     if (existingSession && !existingSession.isRunning) {
         existingSession.log('Reusing existing session');
-        existingSession.isRunning = true;
         
-        try {
-            const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
-            const launchOptions = {
-                headless: headless,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--disable-gpu',
-                    '--window-size=1920x1080'
-                ],
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-                cacheDirectory: cachePath,
-                ignoreDefaultArgs: ['--disable-extensions'],
-                env: {
-                    ...process.env,
-                    PUPPETEER_CACHE_DIR: cachePath
-                }
-            };
-
-            try {
-                existingSession.browser = await puppeteer.launch(launchOptions);
-            } catch (error) {
-                existingSession.log(`Browser launch failed: ${error.message}`);
-                if (!headless) {
-                    existingSession.log('Retrying in headless mode');
-                    launchOptions.headless = true;
-                    existingSession.browser = await puppeteer.launch(launchOptions);
-                } else {
-                    throw error;
-                }
-            }
-
-            // Start automation in background
-            performTasks(existingSession, username, password).catch(error => {
-                existingSession.log(`Automation error: ${error.message}`);
-                existingSession.stop();
-            });
-
+        // Check if we can start immediately or need to queue
+        if (activeSessionCount >= MAX_CONCURRENT_SESSIONS) {
+            // Add to queue
+            addToQueue(existingSession, username, password, headless);
             res.json({ 
                 success: true,
-                message: 'Automation started (reused existing session)',
-                sessionId: existingSession.id
+                message: `Automation queued (reused existing session). Currently ${activeSessionCount} active sessions.`,
+                sessionId: existingSession.id,
+                queued: true
             });
             return;
-        } catch (error) {
-            existingSession.log(`Start error: ${error.message}`);
-            existingSession.stop();
-            res.status(500).json({ 
-                success: false,
-                message: `Failed to start automation: ${error.message}`
-            });
-            return;
+        } else {
+            // Start immediately
+            try {
+                await startSession(existingSession, username, password, headless);
+                
+                res.json({ 
+                    success: true,
+                    message: 'Automation started (reused existing session)',
+                    sessionId: existingSession.id
+                });
+                return;
+            } catch (error) {
+                existingSession.log(`Start error: ${error.message}`);
+                existingSession.stop();
+                res.status(500).json({ 
+                    success: false,
+                    message: `Failed to start automation: ${error.message}`
+                });
+                return;
+            }
         }
     }
 
@@ -795,48 +997,20 @@ app.post('/start', async (req, res) => {
     const session = new AutomationSession(username);
     storeSession(session);
 
-    try {
-        session.log('Starting automation');
-        session.isRunning = true;
-        
-        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
-        const launchOptions = {
-            headless: headless,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--window-size=1920x1080'
-            ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-            cacheDirectory: cachePath,
-            ignoreDefaultArgs: ['--disable-extensions'],
-            env: {
-                ...process.env,
-                PUPPETEER_CACHE_DIR: cachePath
-            }
-        };
-
-        try {
-            session.browser = await puppeteer.launch(launchOptions);
-        } catch (error) {
-            session.log(`Browser launch failed: ${error.message}`);
-            if (!headless) {
-                session.log('Retrying in headless mode');
-                launchOptions.headless = true;
-                session.browser = await puppeteer.launch(launchOptions);
-            } else {
-                throw error;
-            }
-        }
-
-        // Start automation in background
-        performTasks(session, username, password).catch(error => {
-            session.log(`Automation error: ${error.message}`);
-            session.stop();
+    // Check if we can start immediately or need to queue
+    if (activeSessionCount >= MAX_CONCURRENT_SESSIONS) {
+        // Add to queue
+        addToQueue(session, username, password, headless);
+        res.json({ 
+            success: true,
+            message: `Automation queued. Currently ${activeSessionCount} active sessions. You will be notified when it starts.`,
+            sessionId: session.id,
+            queued: true
         });
+    } else {
+        // Start immediately
+        try {
+            await startSession(session, username, password, headless);
 
         res.json({ 
             success: true,
@@ -846,11 +1020,12 @@ app.post('/start', async (req, res) => {
     } catch (error) {
         session.log(`Start error: ${error.message}`);
         session.stop();
-        removeSession(session);
+            removeSession(session);
         res.status(500).json({ 
             success: false,
             message: `Failed to start automation: ${error.message}`
         });
+        }
     }
 });
 
@@ -923,7 +1098,7 @@ app.post('/stop/:sessionId', async (req, res) => {
     try {
         session.log('Stop command received');
         await session.stopAndCleanup();
-        removeSession(session);
+        removeSessionManually(session);
         res.json({ 
             success: true,
             message: 'Automation stopped successfully' 
@@ -951,7 +1126,7 @@ app.post('/stop/phone/:phoneNumber', async (req, res) => {
     try {
         session.log('Stop command received');
         await session.stopAndCleanup();
-        removeSession(session);
+        removeSessionManually(session);
         res.json({ 
             success: true,
             message: 'Automation stopped successfully' 
@@ -964,6 +1139,19 @@ app.post('/stop/phone/:phoneNumber', async (req, res) => {
             error: error.message 
         });
     }
+});
+
+// Check queue status
+app.get('/queue/status', (req, res) => {
+    res.json({
+        activeSessions: activeSessionCount,
+        maxConcurrent: MAX_CONCURRENT_SESSIONS,
+        queuedSessions: SESSION_QUEUE.length,
+        queue: SESSION_QUEUE.map(item => ({
+            phoneNumber: item.phoneNumber,
+            sessionId: item.session.id
+        }))
+    });
 });
 
 // Check if session is active for a phone number
