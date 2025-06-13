@@ -13,9 +13,85 @@ process.on('unhandledRejection', (error) => {
     console.error('Unhandled Rejection:', error);
 });
 
-let logs = [];
-let isRunning = false;
-let currentBrowser = null;  // Add this to track the current browser instance
+// Session management
+const sessions = new Map();
+
+class AutomationSession {
+    constructor(phoneNumber) {
+        this.id = Date.now().toString();
+        this.logs = [];
+        this.isRunning = false;
+        this.browser = null;
+        this.phoneNumber = phoneNumber;
+    }
+
+    log(message) {
+        let emoji = '📝'; // default emoji
+
+        // Add emojis based on message content
+        if (message.toLowerCase().includes('error') || message.toLowerCase().includes('failed')) {
+            emoji = '❌';
+        } else if (message.toLowerCase().includes('phone')) {
+            emoji = '📱';
+        } else if (message.toLowerCase().includes('password')) {
+            emoji = '🔒';
+        } else if (message.toLowerCase().includes('success') || message.toLowerCase().includes('completed')) {
+            emoji = '✅';
+        } else if (message.toLowerCase().includes('start') || message.toLowerCase().includes('begin')) {
+            emoji = '🚀';
+        } else if (message.toLowerCase().includes('stop') || message.toLowerCase().includes('end')) {
+            emoji = '🛑';
+        } else if (message.toLowerCase().includes('wait') || message.toLowerCase().includes('loading')) {
+            emoji = '⏳';
+        } else if (message.toLowerCase().includes('login')) {
+            emoji = '🔑';
+        } else if (message.toLowerCase().includes('navigate') || message.toLowerCase().includes('page')) {
+            emoji = '🌐';
+        } else if (message.toLowerCase().includes('click')) {
+            emoji = '👆';
+        } else if (message.toLowerCase().includes('type') || message.toLowerCase().includes('enter')) {
+            emoji = '⌨️';
+        } else if (message.toLowerCase().includes('screenshot')) {
+            emoji = '📸';
+        } else if (message.toLowerCase().includes('video') || message.toLowerCase().includes('play') || message.toLowerCase().includes('watch')) {
+            emoji = '📺';
+        } else if (message.toLowerCase().includes('task')) {
+            emoji = '📋';
+        } else if (message.toLowerCase().includes('answer')) {
+            emoji = '✍️';
+        }
+
+        // Get current UTC time
+        const now = new Date();
+        // Convert to IST (UTC+5:30)
+        const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
+        const istTime = new Date(now.getTime() + istOffset);
+        
+        // Format the date components
+        const day = istTime.getUTCDate().toString().padStart(2, '0');
+        const month = (istTime.getUTCMonth() + 1).toString().padStart(2, '0');
+        const year = istTime.getUTCFullYear().toString().slice(-2);
+        const hours = istTime.getUTCHours().toString().padStart(2, '0');
+        const minutes = istTime.getUTCMinutes().toString().padStart(2, '0');
+        const seconds = istTime.getUTCSeconds().toString().padStart(2, '0');
+        const formattedTime = `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+        
+        this.logs.push(`${formattedTime} - ${emoji} ${message}`);
+        if (this.logs.length > 1000) this.logs.shift(); // prevent memory overflow
+    }
+
+    async stop() {
+        this.isRunning = false;
+        if (this.browser) {
+            try {
+                await this.browser.close();
+                this.browser = null;
+            } catch (error) {
+                this.log(`Error closing browser: ${error.message}`);
+            }
+        }
+    }
+}
 
 // Constants
 const CONSTANTS = {
@@ -90,57 +166,18 @@ function validatePhoneNumber(phoneNumber) {
 // Utility functions
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Utility to log and store logs
-function log(message) {
-    let emoji = '📝'; // default emoji
-
-    // Add emojis based on message content
-    if (message.toLowerCase().includes('error') || message.toLowerCase().includes('failed')) {
-        emoji = '❌';
-    } else if (message.toLowerCase().includes('phone')) {
-        emoji = '📱';
-    } else if (message.toLowerCase().includes('password')) {
-        emoji = '🔒';
-    } else if (message.toLowerCase().includes('success') || message.toLowerCase().includes('completed')) {
-        emoji = '✅';
-    } else if (message.toLowerCase().includes('start') || message.toLowerCase().includes('begin')) {
-        emoji = '🚀';
-    } else if (message.toLowerCase().includes('stop') || message.toLowerCase().includes('end')) {
-        emoji = '🛑';
-    } else if (message.toLowerCase().includes('wait') || message.toLowerCase().includes('loading')) {
-        emoji = '⏳';
-    } else if (message.toLowerCase().includes('login')) {
-        emoji = '🔑';
-    } else if (message.toLowerCase().includes('navigate') || message.toLowerCase().includes('page')) {
-        emoji = '🌐';
-    } else if (message.toLowerCase().includes('click')) {
-        emoji = '👆';
-    } else if (message.toLowerCase().includes('type') || message.toLowerCase().includes('enter')) {
-        emoji = '⌨️';
-    } else if (message.toLowerCase().includes('screenshot')) {
-        emoji = '📸';
-    } else if (message.toLowerCase().includes('video') || message.toLowerCase().includes('play') || message.toLowerCase().includes('watch')) {
-        emoji = '📺';
-    } else if (message.toLowerCase().includes('task')) {
-        emoji = '📋';
-    } else if (message.toLowerCase().includes('answer')) {
-        emoji = '✍️';
-    }
-
-    const now = new Date();
-    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-    const formattedTime = istTime.toISOString().replace('T', ' ').replace('Z', ' IST');
-    
-    logs.push(`${formattedTime} - ${emoji} ${message}`);
-    if (logs.length > 1000) logs.shift(); // prevent memory overflow
-}
-
-async function takeScreenshot(page, filename) {
+async function takeScreenshot(page, filename, sessionId) {
     try {
-        await page.screenshot({ path: filename });
-        log(`Screenshot taken and saved as ${filename.split('/').pop()}`);
+        const screenshotsDir = path.join(__dirname, 'screenshots', sessionId);
+        if (!fs.existsSync(screenshotsDir)) {
+            fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+        const fullPath = path.join(screenshotsDir, path.basename(filename));
+        await page.screenshot({ path: fullPath });
+        return true;
     } catch (error) {
-        log(`Failed to take screenshot ${filename.split('/').pop()}: ${error.message}`);
+        console.error(`Failed to take screenshot ${filename}:`, error);
+        return false;
     }
 }
 
@@ -149,7 +186,7 @@ async function waitForElement(page, selector, timeout = 30000) {
         await page.waitForSelector(selector, { visible: true, timeout });
         return true;
     } catch (error) {
-        log(`Element not found ${selector}: ${error.message}`);
+        console.error(`Element not found ${selector}: ${error.message}`);
         return false;
     }
 }
@@ -165,17 +202,46 @@ app.get('/', (req, res) => {
 });
 
 // Add screenshots endpoint
-app.get('/screenshots', (req, res) => {
-    const screenshotsDir = path.join(__dirname, 'screenshots');
+app.get('/screenshots/:sessionId', (req, res) => {
+    const sessionId = req.params.sessionId;
+    const session = sessions.get(sessionId);
+    
+    if (!session) {
+        return res.status(404).json({ 
+            success: false,
+            message: 'Session not found. Please start automation first.' 
+        });
+    }
+
+    const screenshotsDir = path.join(__dirname, 'screenshots', sessionId);
     try {
+        // Create directory if it doesn't exist
+        if (!fs.existsSync(screenshotsDir)) {
+            fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+
+        // Read directory contents
         const files = fs.readdirSync(screenshotsDir);
         const screenshots = files.filter(file =>
             file.endsWith('.png') || file.endsWith('.jpg') || file.endsWith('.jpeg')
-        );
-        res.json({ screenshots });
+        ).sort((a, b) => {
+            // Sort by creation time, newest first
+            const statA = fs.statSync(path.join(screenshotsDir, a));
+            const statB = fs.statSync(path.join(screenshotsDir, b));
+            return statB.mtime.getTime() - statA.mtime.getTime();
+        });
+
+        res.json({ 
+            success: true,
+            screenshots,
+            message: screenshots.length === 0 ? 'No screenshots available yet' : `${screenshots.length} screenshots found`
+        });
     } catch (error) {
         console.error('Error reading screenshots directory:', error);
-        res.status(500).json({ error: 'Failed to read screenshots directory' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Failed to read screenshots directory. Please try again.' 
+        });
     }
 });
 
@@ -188,56 +254,33 @@ app.get('/health', (req, res) => {
 });
 
 // Login automation function
-async function performTasks(phoneNumber, password, headless = true) {
-    isRunning = true;
-    log('Starting automation');
-    let browser;
+async function performTasks(session, phoneNumber, password) {
     try {
-        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
-        browser = await puppeteer.launch({
-            headless: headless,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--window-size=1920x1080'
-            ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-            cacheDirectory: cachePath,
-            ignoreDefaultArgs: ['--disable-extensions'],
-            env: {
-                ...process.env,
-                PUPPETEER_CACHE_DIR: cachePath
-            }
-        });
-        currentBrowser = browser;
-        const page = await browser.newPage();
+        const page = await session.browser.newPage();
         page.setDefaultTimeout(30000);
 
-        log('Login started');
+        session.log('Login started');
         await page.goto(CONSTANTS.URLS.LOGIN, { waitUntil: 'networkidle2' });
-        log('Login page loaded');
+        session.log('Login page loaded');
 
         await page.type(CONSTANTS.SELECTORS.LOGIN.PHONE, phoneNumber);
-        log('Entered phone number');
+        session.log('Phone entered');
 
         await page.type(CONSTANTS.SELECTORS.LOGIN.PASSWORD, password);
-        log('Entered password');
+        session.log('Password entered');
 
         await Promise.all([
             page.click(CONSTANTS.SELECTORS.LOGIN.SUBMIT),
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
         ]);
-        log('Login submitted');
+        session.log('Login submitted');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN);
-        log('Login complete');
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN, session.id);
+        session.log('Login complete');
 
         if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.TABBAR)) {
-            log('Task tab missing');
+            session.log('Task tab missing');
             throw new Error('Task tabbar not found');
         }
 
@@ -250,37 +293,30 @@ async function performTasks(phoneNumber, password, headless = true) {
         });
 
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        log('Task page loaded');
+        session.log('Task page loaded');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, session.id);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
-        log(`Tasks left: ${remainingTasksCount}`);
+        session.log(`Tasks left: ${remainingTasksCount}`);
 
         while (remainingTasksCount > 0) {
-            const result = await handleSingleTask(page, remainingTasksCount);
+            const result = await handleSingleTask(page, remainingTasksCount, session);
             if (!result.success) {
-                log(result.message);
+                session.log(result.message);
                 throw new Error(result.message);
             }
             remainingTasksCount = await getRemainingTasksCount(page);
-            log(`Tasks left: ${remainingTasksCount}`);
+            session.log(`Tasks left: ${remainingTasksCount}`);
         }
 
-        log('All tasks done');
-        await browser.close();
+        session.log('All tasks done');
+        await page.close();
         return { success: true, message: 'All tasks completed' };
     } catch (error) {
-        log(`Error: ${error.message}`);
-        if (browser) await browser.close();
+        session.log(`Error: ${error.message}`);
         throw error;
-    } finally {
-        if (browser) {
-            await browser.close();
-            currentBrowser = null;
-        }
-        isRunning = false;
     }
 }
 
@@ -298,14 +334,14 @@ async function getRemainingTasksCount(page) {
         const count = match ? parseInt(match[1]) : 0;
         return count;
     } catch (error) {
-        log(`Error getting remaining tasks count: ${error.message}`);
+        console.error(`Error getting remaining tasks count: ${error.message}`);
         return 0;
     }
 }
 
 // Helper function to handle video watching
-async function handleVideoWatching(page) {
-    log('Video started');
+async function handleVideoWatching(page, session) {
+    session.log('Video started');
     let watchedSeconds = 0;
     let previousSeconds = 0;
     let stuckCount = 0;
@@ -314,8 +350,8 @@ async function handleVideoWatching(page) {
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
-            log('Video timeout');
-            if (await restartVideo(page)) {
+            session.log('Video timeout');
+            if (await restartVideo(page, session)) {
                 startTime = Date.now();
                 stuckCount = 0;
                 previousSeconds = 0;
@@ -334,23 +370,23 @@ async function handleVideoWatching(page) {
             return 0;
         });
 
-        log(`Watched: ${watchedSeconds}s`);
+        session.log(`Watched: ${watchedSeconds}s`);
 
         if (watchedSeconds === previousSeconds) {
             stuckCount++;
             if ((watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
-                log(`Video done at ${watchedSeconds}s`);
+                session.log(`Video done at ${watchedSeconds}s`);
                 return true;
             }
 
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
-                log('Video stuck');
+                session.log('Video stuck');
                 if (videoRestartAttempts >= CONSTANTS.VIDEO.MAX_RESTART_ATTEMPTS) {
-                    log('Max restarts reached');
+                    session.log('Max restarts reached');
                     return false;
                 }
 
-                if (await restartVideo(page)) {
+                if (await restartVideo(page, session)) {
                     videoRestartAttempts++;
                     stuckCount = 0;
                     previousSeconds = 0;
@@ -371,8 +407,8 @@ async function handleVideoWatching(page) {
 }
 
 // Helper function to restart video
-async function restartVideo(page) {
-    log('Restarting video');
+async function restartVideo(page, session) {
+    session.log('Restarting video');
     try {
         await page.evaluate(() => {
             const video = document.querySelector('video');
@@ -406,7 +442,7 @@ async function restartVideo(page) {
         });
 
         if (isPlaying) {
-            log('Video restarted');
+            session.log('Video restarted');
             return true;
         }
 
@@ -433,13 +469,13 @@ async function restartVideo(page) {
         return finalCheck;
 
     } catch (error) {
-        log(`Restart failed: ${error.message}`);
+        session.log(`Restart failed: ${error.message}`);
         return false;
     }
 }
 
 // Helper function to handle a single task
-async function handleSingleTask(page, remainingTasksCount) {
+async function handleSingleTask(page, remainingTasksCount, session) {
     try {
         const taskClicked = await page.evaluate(() => {
             const taskItems = document.querySelectorAll('div[data-v-02e24912].div');
@@ -451,14 +487,14 @@ async function handleSingleTask(page, remainingTasksCount) {
         });
 
         if (!taskClicked) {
-            log('No tasks found');
+            session.log('No tasks found');
             throw new Error('No task items found');
         }
-        log('Task selected');
+        session.log('Task selected');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS);
-        log('Task page loaded');
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.id);
+        session.log('Task page loaded');
 
         const adText = await page.evaluate(() => {
             const introDiv = Array.from(document.querySelectorAll('div[data-v-1d18d737]'))
@@ -469,7 +505,7 @@ async function handleSingleTask(page, remainingTasksCount) {
             }
             return '';
         });
-        log(`Ad text: ${adText}`);
+        session.log(`Ad text: ${adText}`);
 
         let videoSuccess = false;
         let videoRetryCount = 0;
@@ -478,7 +514,7 @@ async function handleSingleTask(page, remainingTasksCount) {
         while (!videoSuccess && videoRetryCount < maxVideoRetries) {
             try {
                 if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
-                    log('Video missing');
+                    session.log('Video missing');
                     throw new Error('Video element not found');
                 }
 
@@ -494,20 +530,20 @@ async function handleSingleTask(page, remainingTasksCount) {
                     return video && !video.paused;
                 });
 
-                log('Video playing');
-                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING);
+                session.log('Video playing');
+                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.id);
 
-                videoSuccess = await handleVideoWatching(page);
+                videoSuccess = await handleVideoWatching(page, session);
 
                 if (!videoSuccess) {
                     videoRetryCount++;
-                    log(`Retry ${videoRetryCount}/${maxVideoRetries}`);
+                    session.log(`Retry ${videoRetryCount}/${maxVideoRetries}`);
                     if (videoRetryCount < maxVideoRetries) {
                         await wait(1000);
                     }
                 }
             } catch (error) {
-                log(`Video error: ${error.message}`);
+                session.log(`Video error: ${error.message}`);
                 videoRetryCount++;
                 if (videoRetryCount < maxVideoRetries) {
                     await wait(1000);
@@ -516,30 +552,30 @@ async function handleSingleTask(page, remainingTasksCount) {
         }
 
         if (!videoSuccess) {
-            log('Video failed');
+            session.log('Video failed');
             throw new Error('Video watching failed');
         }
 
-        await handleAnswerSubmission(page, adText);
+        await handleAnswerSubmission(page, adText, session);
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, session.id);
 
         if (remainingTasksCount > 1) {
             return { success: true, message: 'Task done' };
         } else {
-            log('All done');
+            session.log('All done');
             return { success: true, message: 'All tasks done' };
         }
 
     } catch (error) {
-        log(`Task error: ${error.message}`);
+        session.log(`Task error: ${error.message}`);
         throw error;
     }
 }
 
 // Helper function to handle answer submission
-async function handleAnswerSubmission(page, adText) {
+async function handleAnswerSubmission(page, adText, session) {
     try {
         await page.evaluate(() => {
             const startButton = document.querySelector('button.van-button--danger .van-button__text');
@@ -549,7 +585,7 @@ async function handleAnswerSubmission(page, adText) {
         });
 
         await wait(2000);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS, session.id);
 
         const answerResult = await page.evaluate((adText) => {
             const answers = Array.from(document.querySelectorAll('div[data-v-1d18d737].answer'))
@@ -557,8 +593,8 @@ async function handleAnswerSubmission(page, adText) {
             const correctAnswer = answers.find(answer => adText.toLowerCase().includes(answer.toLowerCase()));
             return { answers, correctAnswer, adText };
         }, adText);
-        log(`Options: ${answerResult.answers}`);
-        log(`Answer: ${answerResult.correctAnswer}`);
+        session.log(`Options: ${answerResult.answers}`);
+        session.log(`Answer: ${answerResult.correctAnswer}`);
 
         if (answerResult.correctAnswer) {
             await page.evaluate((correctAnswer) => {
@@ -568,7 +604,7 @@ async function handleAnswerSubmission(page, adText) {
                     answerElement.click();
                 }
             }, answerResult.correctAnswer);
-            log('Answer selected');
+            session.log('Answer selected');
 
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_BEFORE_SUBMIT);
 
@@ -582,10 +618,10 @@ async function handleAnswerSubmission(page, adText) {
                     submitBtn.click()
                 }
             });
-            log('Answer submitted');
+            session.log('Answer submitted');
 
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_AFTER_SUBMIT);
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT);
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT, session.id);
 
             await page.evaluate(() => {
                 const backButtons = Array.from(document.querySelectorAll('button.van-button--danger'));
@@ -597,17 +633,17 @@ async function handleAnswerSubmission(page, adText) {
                     backBtn.click();
                 }
             });
-            log('Next task');
+            session.log('Next task');
         } else {
-            log('No match found');
+            session.log('No match found');
             await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
             await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            log('Back to list');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK);
+            session.log('Back to list');
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.id);
             return { success: true, message: 'Back to list' };
         }
     } catch (error) {
-        log(`Answer error: ${error.message}`);
+        session.log(`Answer error: ${error.message}`);
         throw error;
     }
 }
@@ -617,7 +653,6 @@ app.post('/start', async (req, res) => {
     const { username, password, headless = true } = req.body;
 
     if (!username || !password) {
-        log('Missing phone number or password');
         return res.status(400).json({
             success: false,
             message: 'Phone number and password are required'
@@ -627,54 +662,135 @@ app.post('/start', async (req, res) => {
     // Validate phone number before proceeding
     const phoneValidation = validatePhoneNumber(username);
     if (!phoneValidation.isValid) {
-        log('Invalid phone number');
         return res.status(400).json({
             success: false,
             message: phoneValidation.message
         });
     }
 
-    if (isRunning) {
-        log('Automation already running');
-        return res.status(400).json({ message: 'Automation already running' });
+    // Check if this phone number already has a running session
+    for (const [sessionId, session] of sessions) {
+        if (session.phoneNumber === username && session.isRunning) {
+            return res.status(400).json({
+                success: false,
+                message: 'You already have an automation running. Please stop the current session before starting a new one.'
+            });
+        }
     }
 
-    logs = [];
-    performTasks(username, password, headless);
-    res.json({ message: 'Automation started' });
+    // Create new session
+    const session = new AutomationSession(username);
+    sessions.set(session.id, session);
+
+    try {
+        session.log('Starting automation');
+        session.isRunning = true;
+        
+        const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
+        const launchOptions = {
+            headless: headless,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920x1080'
+            ],
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            cacheDirectory: cachePath,
+            ignoreDefaultArgs: ['--disable-extensions'],
+            env: {
+                ...process.env,
+                PUPPETEER_CACHE_DIR: cachePath
+            }
+        };
+
+        try {
+            session.browser = await puppeteer.launch(launchOptions);
+        } catch (error) {
+            session.log(`Browser launch failed: ${error.message}`);
+            if (!headless) {
+                session.log('Retrying in headless mode');
+                launchOptions.headless = true;
+                session.browser = await puppeteer.launch(launchOptions);
+            } else {
+                throw error;
+            }
+        }
+
+        // Start automation in background
+        performTasks(session, username, password).catch(error => {
+            session.log(`Automation error: ${error.message}`);
+            session.stop();
+        });
+
+        res.json({ 
+            success: true,
+            message: 'Automation started',
+            sessionId: session.id
+        });
+    } catch (error) {
+        session.log(`Start error: ${error.message}`);
+        session.stop();
+        sessions.delete(session.id);
+        res.status(500).json({ 
+            success: false,
+            message: `Failed to start automation: ${error.message}`
+        });
+    }
 });
 
-app.get('/logs', (req, res) => {
-    res.json({ logs });
+// Get logs for specific session
+app.get('/logs/:sessionId', (req, res) => {
+    const session = sessions.get(req.params.sessionId);
+    if (!session) {
+        return res.status(404).json({ 
+            success: false,
+            message: 'Session not found' 
+        });
+    }
+    res.json({ 
+        success: true,
+        logs: session.logs || [] 
+    });
 });
 
-app.post('/clear', (req, res) => {
-    logs = [];
+// Clear logs for specific session
+app.post('/clear/:sessionId', (req, res) => {
+    const session = sessions.get(req.params.sessionId);
+    if (!session) {
+        return res.status(404).json({ 
+            success: false,
+            message: 'Session not found' 
+        });
+    }
+    session.logs = [];
     res.json({ status: 'success' });
 });
 
-// API endpoint for stop
-app.post('/stop', async (req, res) => {
+// Stop automation for specific session
+app.post('/stop/:sessionId', async (req, res) => {
+    const session = sessions.get(req.params.sessionId);
+    if (!session) {
+        return res.status(404).json({ 
+            success: false,
+            message: 'Session not found' 
+        });
+    }
+
     try {
-        if (!isRunning) {
-            return res.json({ message: 'No automation running' });
-        }
-
-        log('Stop command received');
-        isRunning = false;
-
-        // Close the browser if it exists
-        if (currentBrowser) {
-            log('Closing browser...');
-            await currentBrowser.close();
-            currentBrowser = null;
-            log('Browser closed successfully');
-        }
-
+        session.log('Stop command received');
+        await session.stop();
+        sessions.delete(session.id);
         res.json({ message: 'Automation stopped successfully' });
     } catch (error) {
-        log(`Error stopping automation: ${error.message}`);
-        res.status(500).json({ message: 'Error stopping automation', error: error.message });
+        session.log(`Error stopping automation: ${error.message}`);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error stopping automation', 
+            error: error.message 
+        });
     }
 });
 
@@ -683,16 +799,15 @@ const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 }).on('error', (error) => {
-    console.log(`Server failed to start: ${error}`);
-    log(`Server failed to start: ${error}`);
+    console.error(`Server failed to start: ${error}`);
     process.exit(1);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    log('SIGTERM received. Shutting down gracefully...');
+    console.log('SIGTERM received. Shutting down gracefully...');
     server.close(() => {
-        log('Server closed');
+        console.log('Server closed');
         process.exit(0);
     });
 });

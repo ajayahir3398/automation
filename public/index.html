@@ -330,6 +330,7 @@
 
     <script>
         let logInterval = null;
+        let currentSessionId = null;
 
         async function start() {
             const username = document.getElementById('username').value;
@@ -348,8 +349,14 @@
                     body: JSON.stringify({ username, password, headless }),
                 });
 
-                if (!logInterval) {
-                    logInterval = setInterval(loadLogs, 1000);
+                const data = await res.json();
+                if (data.success) {
+                    currentSessionId = data.sessionId;
+                    if (!logInterval) {
+                        logInterval = setInterval(loadLogs, 1000);
+                    }
+                } else {
+                    alert(data.message || 'Failed to start automation');
                 }
             } catch (error) {
                 console.error(error);
@@ -358,11 +365,22 @@
         }
 
         async function stop() {
+            if (!currentSessionId) {
+                alert('No active session');
+                return;
+            }
+
             try {
-                await fetch(`/stop`, { method: 'POST' });
-                if (logInterval) {
-                    clearInterval(logInterval);
-                    logInterval = null;
+                const res = await fetch(`/stop/${currentSessionId}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    if (logInterval) {
+                        clearInterval(logInterval);
+                        logInterval = null;
+                    }
+                    currentSessionId = null;
+                } else {
+                    alert(data.message || 'Failed to stop automation');
                 }
             } catch (error) {
                 console.error(error);
@@ -371,22 +389,40 @@
         }
 
         async function loadLogs() {
+            if (!currentSessionId) {
+                console.log('No active session');
+                return;
+            }
+
             try {
-                const res = await fetch(`/logs`);
+                const res = await fetch(`/logs/${currentSessionId}`);
+                if (!res.ok) {
+                    throw new Error(`HTTP error! status: ${res.status}`);
+                }
                 const data = await res.json();
-                const logsElement = document.getElementById('logs');
-                
-                // Check if we're at the bottom before updating
-                const isAtBottom = Math.abs(logsElement.scrollHeight - logsElement.scrollTop - logsElement.clientHeight) < 10;
-                
-                // Update the content
-                logsElement.innerText = data.logs.join('\n');
-                
-                // Only scroll if we were at the bottom
-                if (isAtBottom) {
-                    setTimeout(() => {
-                        logsElement.scrollTop = logsElement.scrollHeight;
-                    }, 0);
+                console.log('Logs response:', data); // Debug log
+
+                if (data.success && Array.isArray(data.logs)) {
+                    const logsElement = document.getElementById('logs');
+                    if (!logsElement) {
+                        console.error('Logs element not found');
+                        return;
+                    }
+                    
+                    // Check if we're at the bottom before updating
+                    const isAtBottom = Math.abs(logsElement.scrollHeight - logsElement.scrollTop - logsElement.clientHeight) < 10;
+                    
+                    // Update the content
+                    logsElement.innerText = data.logs.join('\n');
+                    
+                    // Only scroll if we were at the bottom
+                    if (isAtBottom) {
+                        setTimeout(() => {
+                            logsElement.scrollTop = logsElement.scrollHeight;
+                        }, 0);
+                    }
+                } else {
+                    console.error('Invalid logs data:', data);
                 }
             } catch (error) {
                 console.error('Error loading logs:', error);
@@ -394,41 +430,60 @@
         }
 
         async function clearLogs() {
+            if (!currentSessionId) {
+                alert('No active session');
+                return;
+            }
+
             try {
-                await fetch(`/clear`, { method: 'POST' });
-                const logsElement = document.getElementById('logs');
-                logsElement.innerText = '';
+                const res = await fetch(`/clear/${currentSessionId}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    const logsElement = document.getElementById('logs');
+                    logsElement.innerText = '';
+                } else {
+                    alert(data.message || 'Failed to clear logs');
+                }
             } catch (error) {
                 console.error('Error clearing logs:', error);
             }
         }
 
         async function showScreenshots() {
+            if (!currentSessionId) {
+                alert('No active session');
+                return;
+            }
+
             try {
-                const res = await fetch('/screenshots');
+                const res = await fetch(`/screenshots/${currentSessionId}`);
                 const data = await res.json();
-                const modal = document.getElementById('screenshotModal');
-                const grid = document.getElementById('screenshotGrid');
+                if (data.success) {
+                    const modal = document.getElementById('screenshotModal');
+                    const grid = document.getElementById('screenshotGrid');
 
-                grid.innerHTML = '';
-                data.screenshots.forEach(screenshot => {
-                    const item = document.createElement('div');
-                    item.className = 'screenshot-item';
+                    grid.innerHTML = '';
+                    data.screenshots.forEach(screenshot => {
+                        const item = document.createElement('div');
+                        item.className = 'screenshot-item';
 
-                    const img = document.createElement('img');
-                    img.src = `/screenshots/${screenshot}`;
-                    img.alt = screenshot;
-                    img.onclick = () => showFullImage(img.src);
+                        const img = document.createElement('img');
+                        img.src = `/screenshots/${currentSessionId}/${screenshot}`;
+                        img.alt = screenshot;
+                        img.onclick = () => showFullImage(img.src);
 
-                    const name = document.createElement('p');
-                    name.textContent = screenshot;
+                        const name = document.createElement('p');
+                        name.textContent = screenshot;
 
-                    item.appendChild(img);
-                    item.appendChild(name);
-                    grid.appendChild(item);
-                });
+                        item.appendChild(img);
+                        item.appendChild(name);
+                        grid.appendChild(item);
+                    });
 
-                modal.style.display = 'block';
+                    modal.style.display = 'block';
+                } else {
+                    alert(data.message || 'Failed to load screenshots');
+                }
             } catch (error) {
                 console.error('Error loading screenshots:', error);
                 alert('Error loading screenshots');
