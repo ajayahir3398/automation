@@ -114,8 +114,6 @@ class AutomationSession {
                 this.log(`Error closing browser: ${error.message}`);
             }
         }
-        // Delete screenshots for this phone number only when manually stopped
-        await deleteScreenshotsForPhone(this.phoneNumber);
     }
 }
 
@@ -175,26 +173,6 @@ function markSessionAsActive(session) {
     }
 }
 
-// Utility functions for screenshot management
-async function deleteScreenshotsForPhone(phoneNumber) {
-    try {
-        const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
-        if (fs.existsSync(screenshotsDir)) {
-            const files = fs.readdirSync(screenshotsDir);
-            for (const file of files) {
-                const filePath = path.join(screenshotsDir, file);
-                if (fs.statSync(filePath).isFile()) {
-                    fs.unlinkSync(filePath);
-                }
-            }
-            fs.rmdirSync(screenshotsDir);
-            console.log(`Deleted screenshots for phone: ${phoneNumber}`);
-        }
-    } catch (error) {
-        console.error(`Error deleting screenshots for phone ${phoneNumber}:`, error);
-    }
-}
-
 // Constants
 const CONSTANTS = {
     WAIT_TIMES: {
@@ -221,16 +199,6 @@ const CONSTANTS = {
     },
     URLS: {
         LOGIN: 'https://dteworks.com/xml/index.html#/login'
-    },
-    SCREENSHOTS: {
-        LOGGED_IN: 'screenshots/loggedin.png',
-        TASK_TAB: 'screenshots/tasktab.png',
-        TASK_DETAILS: 'screenshots/taskdetails.png',
-        VIDEO_PLAYING: 'screenshots/videoPlaying.png',
-        ANSWER_OPTIONS: 'screenshots/answerOptions.png',
-        AFTER_SUBMIT: 'screenshots/afterSubmit.png',
-        AFTER_BACK: 'screenshots/afterBack.png',
-        GO_BACK: 'screenshots/goBack.png'
     },
     VIDEO: {
         REQUIRED_SECONDS: 15,
@@ -268,21 +236,6 @@ function validatePhoneNumber(phoneNumber) {
 // Utility functions
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function takeScreenshot(page, filename, phoneNumber) {
-    try {
-        const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
-        if (!fs.existsSync(screenshotsDir)) {
-            fs.mkdirSync(screenshotsDir, { recursive: true });
-        }
-        const fullPath = path.join(screenshotsDir, path.basename(filename));
-        await page.screenshot({ path: fullPath });
-        return true;
-    } catch (error) {
-        console.error(`Failed to take screenshot ${filename}:`, error);
-        return false;
-    }
-}
-
 async function waitForElement(page, selector, timeout = 30000) {
     try {
         await page.waitForSelector(selector, { visible: true, timeout });
@@ -302,49 +255,6 @@ app.use(express.static(path.join(__dirname)));
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/index.html'));
 });
-
-// Add screenshots endpoint
-app.get('/screenshots/:phoneNumber', (req, res) => {
-    const phoneNumber = req.params.phoneNumber;
-    
-    // Remove session requirement - allow access to screenshots even without active session
-    const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
-    try {
-        // Check if directory exists
-        if (!fs.existsSync(screenshotsDir)) {
-        return res.status(404).json({ 
-            success: false,
-                message: 'No screenshots found for this phone number' 
-            });
-        }
-
-        // Read directory contents
-        const files = fs.readdirSync(screenshotsDir);
-        const screenshots = files.filter(file =>
-            file.endsWith('.png') || file.endsWith('.jpg') || file.endsWith('.jpeg')
-        ).sort((a, b) => {
-            // Sort by creation time, newest first
-            const statA = fs.statSync(path.join(screenshotsDir, a));
-            const statB = fs.statSync(path.join(screenshotsDir, b));
-            return statB.mtime.getTime() - statA.mtime.getTime();
-        });
-
-        res.json({ 
-            success: true,
-            screenshots,
-            message: screenshots.length === 0 ? 'No screenshots available yet' : `${screenshots.length} screenshots found`
-        });
-    } catch (error) {
-        console.error('Error reading screenshots directory:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Failed to read screenshots directory. Please try again.' 
-        });
-    }
-});
-
-// Serve screenshots directory
-app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
 
 // Add health check endpoint
 app.get('/health', (req, res) => {
@@ -391,7 +301,6 @@ async function performTasks(session, phoneNumber, password) {
         session.log('Login submitted');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN, phoneNumber);
         session.log('Login complete');
 
         if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.TABBAR)) {
@@ -414,7 +323,6 @@ async function performTasks(session, phoneNumber, password) {
         session.log('Task page loaded');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, phoneNumber);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
         session.log(`Tasks left: ${remainingTasksCount}`);
@@ -611,7 +519,6 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         session.log('Task selected');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.phoneNumber);
         session.log('Task page loaded');
 
         const adText = await page.evaluate(() => {
@@ -649,7 +556,6 @@ async function handleSingleTask(page, remainingTasksCount, session) {
                 });
 
                 session.log('Video playing');
-                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
 
                 videoSuccess = await handleVideoWatching(page, session);
 
@@ -677,7 +583,6 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         await handleAnswerSubmission(page, adText, session);
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, session.phoneNumber);
 
         if (remainingTasksCount > 1) {
             return { success: true, message: 'Task done' };
@@ -703,7 +608,6 @@ async function handleAnswerSubmission(page, adText, session) {
         });
 
         await wait(2000);
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS, session.phoneNumber);
 
         const answerResult = await page.evaluate((adText) => {
             const answers = Array.from(document.querySelectorAll('div[data-v-1d18d737].answer'))
@@ -739,7 +643,6 @@ async function handleAnswerSubmission(page, adText, session) {
             session.log('Answer submitted');
 
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_AFTER_SUBMIT);
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT, session.phoneNumber);
 
             await page.evaluate(() => {
                 const backButtons = Array.from(document.querySelectorAll('button.van-button--danger'));
@@ -757,7 +660,6 @@ async function handleAnswerSubmission(page, adText, session) {
             await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
             await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
             session.log('Back to list');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
             return { success: true, message: 'Back to list' };
         }
     } catch (error) {
@@ -852,10 +754,6 @@ async function handleSuccessfulCompletion(session, phoneNumber) {
     try {
         session.log('Automation completed successfully - starting cleanup');
         
-        // Delete screenshots for successful completion
-        await deleteScreenshotsForPhone(phoneNumber);
-        session.log('Screenshots deleted for successful completion');
-        
         // Stop the session
         session.stop();
         
@@ -880,7 +778,7 @@ async function performTasksWithRetry(session, phoneNumber, password) {
         session.log('All tasks completed successfully');
         await handleSuccessfulCompletion(session, phoneNumber);
     } catch (error) {
-        session.log(`Automation error: ${error.message}`);
+            session.log(`Automation error: ${error.message}`);
         
         // Retry logic for navigation timeouts
         if (error.message.includes('Navigation timeout') && session.retryCount < session.maxRetries) {
@@ -914,7 +812,7 @@ async function performTasksWithRetry(session, phoneNumber, password) {
                 await handleSuccessfulCompletion(session, phoneNumber);
             } catch (retryError) {
                 session.log(`Retry failed: ${retryError.message}`);
-                session.stop();
+            session.stop();
                 removeSession(session);
             }
         } else {
