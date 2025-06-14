@@ -86,7 +86,7 @@ class AutomationSession {
         const minutes = istTime.getUTCMinutes().toString().padStart(2, '0');
         const seconds = istTime.getUTCSeconds().toString().padStart(2, '0');
         const formattedTime = `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
-        console.log(message)
+        // console.log(message)
         this.logs.push(`${formattedTime} - ${emoji} ${message}`);
         if (this.logs.length > 1000) this.logs.shift(); // prevent memory overflow
     }
