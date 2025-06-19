@@ -77,7 +77,7 @@ class AutomationSession {
         // Convert to IST (UTC+5:30)
         const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
         const istTime = new Date(now.getTime() + istOffset);
-        
+
         // Format the date components
         const day = istTime.getUTCDate().toString().padStart(2, '0');
         const month = (istTime.getUTCMonth() + 1).toString().padStart(2, '0');
@@ -114,6 +114,8 @@ class AutomationSession {
                 this.log(`Error closing browser: ${error.message}`);
             }
         }
+        // Delete screenshots for this phone number only when manually stopped
+        await deleteScreenshotsForPhone(this.phoneNumber);
     }
 }
 
@@ -136,7 +138,7 @@ function removeSession(session) {
     console.log(`Removing session for ${session.phoneNumber}, isRunning: ${session.isRunning}, isActiveSession: ${session.isActiveSession}, activeSessionCount: ${activeSessionCount}`);
     sessions.delete(session.phoneNumber);
     sessionIds.delete(session.id);
-    
+
     // Only decrement if this session was actually counted as active
     if (session.isActiveSession) {
         activeSessions.delete(session.id);
@@ -152,7 +154,7 @@ function removeSessionManually(session) {
     console.log(`Manually removing session for ${session.phoneNumber}, isActiveSession: ${session.isActiveSession}, activeSessionCount: ${activeSessionCount}`);
     sessions.delete(session.phoneNumber);
     sessionIds.delete(session.id);
-    
+
     // Always decrement count for manual stops if it was an active session
     if (session.isActiveSession) {
         activeSessions.delete(session.id);
@@ -170,6 +172,27 @@ function markSessionAsActive(session) {
         activeSessions.add(session.id);
         activeSessionCount = activeSessions.size;
         console.log(`Session ${session.id} marked as active, activeSessionCount: ${activeSessionCount}`);
+    }
+}
+
+
+// Utility functions for screenshot management
+async function deleteScreenshotsForPhone(phoneNumber) {
+    try {
+        const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
+        if (fs.existsSync(screenshotsDir)) {
+            const files = fs.readdirSync(screenshotsDir);
+            for (const file of files) {
+                const filePath = path.join(screenshotsDir, file);
+                if (fs.statSync(filePath).isFile()) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+            fs.rmdirSync(screenshotsDir);
+            console.log(`Deleted screenshots for phone: ${phoneNumber}`);
+        }
+    } catch (error) {
+        console.error(`Error deleting screenshots for phone ${phoneNumber}:`, error);
     }
 }
 
@@ -199,6 +222,16 @@ const CONSTANTS = {
     },
     URLS: {
         LOGIN: 'https://dteworks.com/xml/index.html#/login'
+    },
+    SCREENSHOTS: {
+        LOGGED_IN: 'screenshots/loggedin.png',
+        TASK_TAB: 'screenshots/tasktab.png',
+        TASK_DETAILS: 'screenshots/taskdetails.png',
+        VIDEO_PLAYING: 'screenshots/videoPlaying.png',
+        ANSWER_OPTIONS: 'screenshots/answerOptions.png',
+        AFTER_SUBMIT: 'screenshots/afterSubmit.png',
+        AFTER_BACK: 'screenshots/afterBack.png',
+        GO_BACK: 'screenshots/goBack.png'
     },
     VIDEO: {
         REQUIRED_SECONDS: 15,
@@ -236,6 +269,22 @@ function validatePhoneNumber(phoneNumber) {
 // Utility functions
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+
+async function takeScreenshot(page, filename, phoneNumber) {
+    try {
+        const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
+        if (!fs.existsSync(screenshotsDir)) {
+            fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+        const fullPath = path.join(screenshotsDir, path.basename(filename));
+        await page.screenshot({ path: fullPath });
+        return true;
+    } catch (error) {
+        console.error(`Failed to take screenshot ${filename}:`, error);
+        return false;
+    }
+}
+
 async function waitForElement(page, selector, timeout = 30000) {
     try {
         await page.waitForSelector(selector, { visible: true, timeout });
@@ -256,6 +305,50 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
+
+// Add screenshots endpoint
+app.get('/screenshots/:phoneNumber', (req, res) => {
+    const phoneNumber = req.params.phoneNumber;
+
+    // Remove session requirement - allow access to screenshots even without active session
+    const screenshotsDir = path.join(__dirname, 'screenshots', phoneNumber);
+    try {
+        // Check if directory exists
+        if (!fs.existsSync(screenshotsDir)) {
+            return res.status(404).json({
+                success: false,
+                message: 'No screenshots found for this phone number'
+            });
+        }
+
+        // Read directory contents
+        const files = fs.readdirSync(screenshotsDir);
+        const screenshots = files.filter(file =>
+            file.endsWith('.png') || file.endsWith('.jpg') || file.endsWith('.jpeg')
+        ).sort((a, b) => {
+            // Sort by creation time, newest first
+            const statA = fs.statSync(path.join(screenshotsDir, a));
+            const statB = fs.statSync(path.join(screenshotsDir, b));
+            return statB.mtime.getTime() - statA.mtime.getTime();
+        });
+
+        res.json({
+            success: true,
+            screenshots,
+            message: screenshots.length === 0 ? 'No screenshots available yet' : `${screenshots.length} screenshots found`
+        });
+    } catch (error) {
+        console.error('Error reading screenshots directory:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to read screenshots directory. Please try again.'
+        });
+    }
+});
+
+// Serve screenshots directory
+app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
+
 // Add health check endpoint
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
@@ -265,21 +358,21 @@ app.get('/health', (req, res) => {
 async function performTasks(session, phoneNumber, password) {
     try {
         const page = await session.browser.newPage();
-        
+
         // Set longer timeout for parallel sessions
         const timeout = activeSessionCount > 1 ? 60000 : 30000;
         page.setDefaultTimeout(timeout);
-        
+
         // Set viewport and user agent for better performance
         await page.setViewport({ width: 1920, height: 1080 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         session.log('Login started');
-        
+
         // Use more reliable navigation options
-        await page.goto(CONSTANTS.URLS.LOGIN, { 
+        await page.goto(CONSTANTS.URLS.LOGIN, {
             waitUntil: 'domcontentloaded',
-            timeout: timeout 
+            timeout: timeout
         });
         session.log('Login page loaded');
 
@@ -294,13 +387,14 @@ async function performTasks(session, phoneNumber, password) {
 
         // Use more reliable navigation for login
         await page.click(CONSTANTS.SELECTORS.LOGIN.SUBMIT);
-        await page.waitForNavigation({ 
+        await page.waitForNavigation({
             waitUntil: 'domcontentloaded',
-            timeout: timeout 
+            timeout: timeout
         });
         session.log('Login submitted');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.LOGGED_IN, phoneNumber);
         session.log('Login complete');
 
         if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.TABBAR)) {
@@ -316,13 +410,14 @@ async function performTasks(session, phoneNumber, password) {
             }
         });
 
-        await page.waitForNavigation({ 
+        await page.waitForNavigation({
             waitUntil: 'domcontentloaded',
-            timeout: timeout 
+            timeout: timeout
         });
         session.log('Task page loaded');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, phoneNumber);
 
         let remainingTasksCount = await getRemainingTasksCount(page);
         session.log(`Tasks left: ${remainingTasksCount}`);
@@ -519,6 +614,7 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         session.log('Task selected');
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.phoneNumber);
         session.log('Task page loaded');
 
         const adText = await page.evaluate(() => {
@@ -556,6 +652,7 @@ async function handleSingleTask(page, remainingTasksCount, session) {
                 });
 
                 session.log('Video playing');
+                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
 
                 videoSuccess = await handleVideoWatching(page, session);
 
@@ -583,6 +680,7 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         await handleAnswerSubmission(page, adText, session);
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_TAB, session.phoneNumber);
 
         if (remainingTasksCount > 1) {
             return { success: true, message: 'Task done' };
@@ -608,6 +706,7 @@ async function handleAnswerSubmission(page, adText, session) {
         });
 
         await wait(2000);
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.ANSWER_OPTIONS, session.phoneNumber);
 
         const answerResult = await page.evaluate((adText) => {
             const answers = Array.from(document.querySelectorAll('div[data-v-1d18d737].answer'))
@@ -643,6 +742,7 @@ async function handleAnswerSubmission(page, adText, session) {
             session.log('Answer submitted');
 
             await wait(CONSTANTS.WAIT_TIMES.ANSWER_AFTER_SUBMIT);
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.AFTER_SUBMIT, session.phoneNumber);
 
             await page.evaluate(() => {
                 const backButtons = Array.from(document.querySelectorAll('button.van-button--danger'));
@@ -660,6 +760,7 @@ async function handleAnswerSubmission(page, adText, session) {
             await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
             await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
             session.log('Back to list');
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
             return { success: true, message: 'Back to list' };
         }
     } catch (error) {
@@ -692,10 +793,10 @@ async function startSession(session, phoneNumber, password, headless) {
         session.startTime = Date.now();
         session.log('Starting automation');
         session.isRunning = true;
-        
+
         // Mark session as active before starting
         markSessionAsActive(session);
-        
+
         const cachePath = process.env.PUPPETEER_CACHE_DIR || '/opt/render/.cache/puppeteer';
         const launchOptions = {
             headless: headless,
@@ -753,16 +854,20 @@ async function startSession(session, phoneNumber, password, headless) {
 async function handleSuccessfulCompletion(session, phoneNumber) {
     try {
         session.log('Automation completed successfully - starting cleanup');
-        
+
+        // Delete screenshots for successful completion
+        await deleteScreenshotsForPhone(phoneNumber);
+        session.log('Screenshots deleted for successful completion');
+
         // Stop the session
         session.stop();
-        
+
         // Wait a bit before removing session to allow frontend to get final logs
         await wait(3000);
-        
+
         // Remove session from tracking
         removeSession(session);
-        
+
         session.log('Cleanup completed successfully');
     } catch (error) {
         session.log(`Error during cleanup: ${error.message}`);
@@ -778,16 +883,16 @@ async function performTasksWithRetry(session, phoneNumber, password) {
         session.log('All tasks completed successfully');
         await handleSuccessfulCompletion(session, phoneNumber);
     } catch (error) {
-            session.log(`Automation error: ${error.message}`);
-        
+        session.log(`Automation error: ${error.message}`);
+
         // Retry logic for navigation timeouts
         if (error.message.includes('Navigation timeout') && session.retryCount < session.maxRetries) {
             session.retryCount++;
             session.log(`Retrying automation (attempt ${session.retryCount}/${session.maxRetries})`);
-            
+
             // Wait before retry
             await wait(5000 * session.retryCount);
-            
+
             // Restart the session
             try {
                 if (session.browser) {
@@ -805,14 +910,14 @@ async function performTasksWithRetry(session, phoneNumber, password) {
                         '--max_old_space_size=4096'
                     ]
                 });
-                
+
                 await performTasks(session, phoneNumber, password);
                 // Tasks completed successfully after retry - use comprehensive cleanup
                 session.log('All tasks completed successfully after retry');
                 await handleSuccessfulCompletion(session, phoneNumber);
             } catch (retryError) {
                 session.log(`Retry failed: ${retryError.message}`);
-            session.stop();
+                session.stop();
                 removeSession(session);
             }
         } else {
@@ -856,12 +961,12 @@ app.post('/start', async (req, res) => {
     // If session exists but not running, reuse it
     if (existingSession && !existingSession.isRunning) {
         existingSession.log('Reusing existing session');
-        
+
         // Check if we can start immediately or need to queue
         if (activeSessionCount >= MAX_CONCURRENT_SESSIONS) {
             // Add to queue
             addToQueue(existingSession, username, password, headless);
-            res.json({ 
+            res.json({
                 success: true,
                 message: `Automation queued (reused existing session). Currently ${activeSessionCount} active sessions.`,
                 sessionId: existingSession.id,
@@ -872,8 +977,8 @@ app.post('/start', async (req, res) => {
             // Start immediately
             try {
                 await startSession(existingSession, username, password, headless);
-                
-                res.json({ 
+
+                res.json({
                     success: true,
                     message: 'Automation started (reused existing session)',
                     sessionId: existingSession.id
@@ -882,7 +987,7 @@ app.post('/start', async (req, res) => {
             } catch (error) {
                 existingSession.log(`Start error: ${error.message}`);
                 existingSession.stop();
-                res.status(500).json({ 
+                res.status(500).json({
                     success: false,
                     message: `Failed to start automation: ${error.message}`
                 });
@@ -899,7 +1004,7 @@ app.post('/start', async (req, res) => {
     if (activeSessionCount >= MAX_CONCURRENT_SESSIONS) {
         // Add to queue
         addToQueue(session, username, password, headless);
-        res.json({ 
+        res.json({
             success: true,
             message: `Automation queued. Currently ${activeSessionCount} active sessions. You will be notified when it starts.`,
             sessionId: session.id,
@@ -910,19 +1015,19 @@ app.post('/start', async (req, res) => {
         try {
             await startSession(session, username, password, headless);
 
-        res.json({ 
-            success: true,
-            message: 'Automation started',
-            sessionId: session.id
-        });
-    } catch (error) {
-        session.log(`Start error: ${error.message}`);
-        session.stop();
+            res.json({
+                success: true,
+                message: 'Automation started',
+                sessionId: session.id
+            });
+        } catch (error) {
+            session.log(`Start error: ${error.message}`);
+            session.stop();
             removeSession(session);
-        res.status(500).json({ 
-            success: false,
-            message: `Failed to start automation: ${error.message}`
-        });
+            res.status(500).json({
+                success: false,
+                message: `Failed to start automation: ${error.message}`
+            });
         }
     }
 });
@@ -931,14 +1036,14 @@ app.post('/start', async (req, res) => {
 app.get('/logs/:sessionId', (req, res) => {
     const session = getSessionById(req.params.sessionId);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
-    res.json({ 
+    res.json({
         success: true,
-        logs: session.logs || [] 
+        logs: session.logs || []
     });
 });
 
@@ -946,14 +1051,14 @@ app.get('/logs/:sessionId', (req, res) => {
 app.get('/logs/phone/:phoneNumber', (req, res) => {
     const session = getSessionByPhone(req.params.phoneNumber);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
-    res.json({ 
+    res.json({
         success: true,
-        logs: session.logs || [] 
+        logs: session.logs || []
     });
 });
 
@@ -961,9 +1066,9 @@ app.get('/logs/phone/:phoneNumber', (req, res) => {
 app.post('/clear/:sessionId', (req, res) => {
     const session = getSessionById(req.params.sessionId);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
     session.logs = [];
@@ -974,9 +1079,9 @@ app.post('/clear/:sessionId', (req, res) => {
 app.post('/clear/phone/:phoneNumber', (req, res) => {
     const session = getSessionByPhone(req.params.phoneNumber);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
     session.logs = [];
@@ -987,9 +1092,9 @@ app.post('/clear/phone/:phoneNumber', (req, res) => {
 app.post('/stop/:sessionId', async (req, res) => {
     const session = getSessionById(req.params.sessionId);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
 
@@ -997,16 +1102,16 @@ app.post('/stop/:sessionId', async (req, res) => {
         session.log('Stop command received');
         await session.stopAndCleanup();
         removeSessionManually(session);
-        res.json({ 
+        res.json({
             success: true,
-            message: 'Automation stopped successfully' 
+            message: 'Automation stopped successfully'
         });
     } catch (error) {
         session.log(`Error stopping automation: ${error.message}`);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: 'Error stopping automation', 
-            error: error.message 
+            message: 'Error stopping automation',
+            error: error.message
         });
     }
 });
@@ -1015,9 +1120,9 @@ app.post('/stop/:sessionId', async (req, res) => {
 app.post('/stop/phone/:phoneNumber', async (req, res) => {
     const session = getSessionByPhone(req.params.phoneNumber);
     if (!session) {
-        return res.status(404).json({ 
+        return res.status(404).json({
             success: false,
-            message: 'Session not found' 
+            message: 'Session not found'
         });
     }
 
@@ -1025,16 +1130,16 @@ app.post('/stop/phone/:phoneNumber', async (req, res) => {
         session.log('Stop command received');
         await session.stopAndCleanup();
         removeSessionManually(session);
-        res.json({ 
+        res.json({
             success: true,
-            message: 'Automation stopped successfully' 
+            message: 'Automation stopped successfully'
         });
     } catch (error) {
         session.log(`Error stopping automation: ${error.message}`);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: 'Error stopping automation', 
-            error: error.message 
+            message: 'Error stopping automation',
+            error: error.message
         });
     }
 });
@@ -1056,16 +1161,16 @@ app.get('/queue/status', (req, res) => {
 app.get('/session/status/:phoneNumber', (req, res) => {
     const phoneNumber = req.params.phoneNumber;
     const session = getSessionByPhone(phoneNumber);
-    
+
     if (!session) {
-        return res.json({ 
+        return res.json({
             success: false,
             isActive: false,
-            message: 'No session found for this phone number' 
+            message: 'No session found for this phone number'
         });
     }
-    
-    res.json({ 
+
+    res.json({
         success: true,
         isActive: session.isRunning,
         sessionId: session.id,
