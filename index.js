@@ -277,6 +277,10 @@ async function takeScreenshot(page, filename, phoneNumber) {
             fs.mkdirSync(screenshotsDir, { recursive: true });
         }
         const fullPath = path.join(screenshotsDir, path.basename(filename));
+        // Delete the file if it already exists
+        if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+        }
         await page.screenshot({ path: fullPath });
         return true;
     } catch (error) {
@@ -466,7 +470,6 @@ async function handleVideoWatching(page, session) {
     let watchedSeconds = 0;
     let previousSeconds = 0;
     let stuckCount = 0;
-    let videoRestartAttempts = 0;
     let startTime = Date.now();
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
@@ -495,14 +498,18 @@ async function handleVideoWatching(page, session) {
 
         if (watchedSeconds === previousSeconds) {
             stuckCount++;
-            if ((watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
+            if ((watchedSeconds === 12 || watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
                 session.log(`Video done at ${watchedSeconds}s`);
                 return true;
             }
 
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
                 session.log('Video stuck, will reload page and restart task');
-                throw new Error('Video stuck, reload and restart task');
+                await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+                await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+                session.log('Back to list');
+                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
+                return false;
             }
         } else {
             stuckCount = 0;
