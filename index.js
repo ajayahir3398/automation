@@ -501,19 +501,8 @@ async function handleVideoWatching(page, session) {
             }
 
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
-                session.log('Video stuck');
-                if (videoRestartAttempts >= CONSTANTS.VIDEO.MAX_RESTART_ATTEMPTS) {
-                    session.log('Max restarts reached');
-                    return false;
-                }
-
-                if (await restartVideo(page, session)) {
-                    videoRestartAttempts++;
-                    stuckCount = 0;
-                    previousSeconds = 0;
-                    continue;
-                }
-                return false;
+                session.log('Video stuck, will reload page and restart task');
+                throw new Error('Video stuck, reload and restart task');
             }
         } else {
             stuckCount = 0;
@@ -628,53 +617,37 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         });
         session.log(`Ad text: ${adText}`);
 
-        let videoSuccess = false;
-        let videoRetryCount = 0;
-        const maxVideoRetries = 3;
-
-        while (!videoSuccess && videoRetryCount < maxVideoRetries) {
-            try {
-                if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
-                    session.log('Video missing');
-                    throw new Error('Video element not found');
-                }
-
-                await page.evaluate(() => {
-                    const playButton = document.querySelector('.vjs-big-play-button');
-                    if (playButton) {
-                        playButton.click();
-                    }
-                });
-
-                await page.waitForFunction(() => {
-                    const video = document.querySelector('video');
-                    return video && !video.paused;
-                });
-
-                session.log('Video playing');
-                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
-
-                videoSuccess = await handleVideoWatching(page, session);
-
-                if (!videoSuccess) {
-                    videoRetryCount++;
-                    session.log(`Retry ${videoRetryCount}/${maxVideoRetries}`);
-                    if (videoRetryCount < maxVideoRetries) {
-                        await wait(1000);
-                    }
-                }
-            } catch (error) {
-                session.log(`Video error: ${error.message}`);
-                videoRetryCount++;
-                if (videoRetryCount < maxVideoRetries) {
-                    await wait(1000);
-                }
+        // Only attempt to play the video once per task
+        try {
+            if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
+                session.log('Video missing');
+                throw new Error('Video element not found');
             }
-        }
 
-        if (!videoSuccess) {
-            session.log('Video failed');
-            throw new Error('Video watching failed');
+            await page.evaluate(() => {
+                const playButton = document.querySelector('.vjs-big-play-button');
+                if (playButton) {
+                    playButton.click();
+                }
+            });
+
+            await page.waitForFunction(() => {
+                const video = document.querySelector('video');
+                return video && !video.paused;
+            });
+
+            session.log('Video playing');
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
+
+            const videoSuccess = await handleVideoWatching(page, session);
+
+            if (!videoSuccess) {
+                session.log('Video failed');
+                throw new Error('Video watching failed');
+            }
+        } catch (error) {
+            session.log(`Video error: ${error.message}`);
+            throw error;
         }
 
         await handleAnswerSubmission(page, adText, session);
@@ -691,6 +664,46 @@ async function handleSingleTask(page, remainingTasksCount, session) {
 
     } catch (error) {
         session.log(`Task error: ${error.message}`);
+        if (error.message && error.message.includes('reload and restart task')) {
+            session.log('Reloading page and restarting task from task detail...');
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+
+            // Re-navigate to the task tab
+            await page.evaluate(() => {
+                const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
+                const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
+                if (taskTab) {
+                    taskTab.click();
+                }
+            });
+            await page.waitForNavigation({
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+            });
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+
+            // Click the first task again
+            const taskClicked = await page.evaluate(() => {
+                const taskItems = document.querySelectorAll('div[data-v-02e24912].div');
+                if (taskItems.length > 0) {
+                    taskItems[0].click();
+                    return true;
+                }
+                return false;
+            });
+            if (!taskClicked) {
+                session.log('No tasks found after reload');
+                throw new Error('No task items found after reload');
+            }
+            session.log('Task selected after reload');
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.phoneNumber);
+            session.log('Task page loaded after reload');
+
+            // Now, recursively call handleSingleTask to restart the process
+            return await handleSingleTask(page, remainingTasksCount, session);
+        }
         throw error;
     }
 }
