@@ -471,6 +471,7 @@ async function handleVideoWatching(page, session) {
     let previousSeconds = 0;
     let stuckCount = 0;
     let startTime = Date.now();
+    let lastProgressTime = Date.now();
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
@@ -479,6 +480,7 @@ async function handleVideoWatching(page, session) {
                 startTime = Date.now();
                 stuckCount = 0;
                 previousSeconds = 0;
+                lastProgressTime = Date.now();
                 continue;
             }
             return false;
@@ -496,24 +498,114 @@ async function handleVideoWatching(page, session) {
 
         session.log(`Watched: ${watchedSeconds}s`);
 
-        if (watchedSeconds === previousSeconds) {
+        // Check if video has progressed
+        if (watchedSeconds > previousSeconds) {
+            stuckCount = 0;
+            previousSeconds = watchedSeconds;
+            lastProgressTime = Date.now();
+        } else if (watchedSeconds === previousSeconds) {
             stuckCount++;
-            if ((watchedSeconds === 12 || watchedSeconds === 13 || watchedSeconds === 14) && stuckCount > 3) {
-                session.log(`Video done at ${watchedSeconds}s`);
-                return true;
+            
+            // More lenient stuck detection - only consider stuck if:
+            // 1. We're not at the end of the video (10s or more)
+            // 2. We've been stuck for a reasonable amount of time
+            // 3. We're not at a common completion point
+            
+            const timeSinceLastProgress = Date.now() - lastProgressTime;
+            const isAtCompletionPoint = watchedSeconds >= 10; // Videos often complete at 10s
+            const isNearCompletion = watchedSeconds >= 8; // Videos near completion
+            const hasBeenStuckTooLong = timeSinceLastProgress > (isNearCompletion ? 20000 : 15000); // More lenient for near completion
+            
+            // If we're at 10 seconds or more, wait a bit longer to confirm completion
+            if (isAtCompletionPoint && watchedSeconds >= 10) {
+                // Wait a bit more to confirm the video is actually complete
+                await wait(3000);
+                
+                // Check one more time to see if it progressed
+                const finalCheck = await page.evaluate(() => {
+                    const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
+                        .find(p => p.textContent.includes('Currently watched'));
+                    if (watchedText) {
+                        const secondsMatch = watchedText.textContent.match(/\d+/);
+                        return secondsMatch ? parseInt(secondsMatch[0]) : 0;
+                    }
+                    return 0;
+                });
+                
+                if (finalCheck === watchedSeconds) {
+                    session.log(`Video confirmed complete at ${watchedSeconds}s`);
+                    return true;
+                } else {
+                    session.log(`Video progressed to ${finalCheck}s after wait`);
+                    watchedSeconds = finalCheck;
+                    stuckCount = 0;
+                    previousSeconds = finalCheck;
+                    lastProgressTime = Date.now();
+                }
             }
-
-            if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
-                session.log('Video stuck, will reload page and restart task');
+            
+            // Additional check: look for completion indicators in the UI
+            if (isAtCompletionPoint && watchedSeconds >= 10) {
+                const hasCompletionIndicator = await page.evaluate(() => {
+                    // Look for common completion indicators
+                    const completionTexts = [
+                        'Video completed',
+                        'Task completed',
+                        'Continue',
+                        'Next',
+                        'Submit',
+                        'Start Answering'
+                    ];
+                    
+                    const pageText = document.body.textContent.toLowerCase();
+                    return completionTexts.some(text => pageText.includes(text.toLowerCase()));
+                });
+                
+                if (hasCompletionIndicator) {
+                    session.log(`Video completion detected via UI indicators at ${watchedSeconds}s`);
+                    return true;
+                }
+                
+                // Check if video has actually finished playing
+                const videoState = await page.evaluate(() => {
+                    const video = document.querySelector('video');
+                    if (video) {
+                        return {
+                            ended: video.ended,
+                            currentTime: video.currentTime,
+                            duration: video.duration,
+                            paused: video.paused
+                        };
+                    }
+                    return null;
+                });
+                
+                if (videoState && (videoState.ended || (videoState.currentTime >= videoState.duration - 1))) {
+                    session.log(`Video element indicates completion at ${watchedSeconds}s (ended: ${videoState.ended}, currentTime: ${videoState.currentTime}, duration: ${videoState.duration})`);
+                    return true;
+                }
+            }
+            
+            if (stuckCount >= (isNearCompletion ? CONSTANTS.VIDEO.MAX_STUCK_COUNT + 2 : CONSTANTS.VIDEO.MAX_STUCK_COUNT) && hasBeenStuckTooLong && !isAtCompletionPoint) {
+                session.log(`Video stuck at ${watchedSeconds}s for ${Math.round(timeSinceLastProgress/1000)}s, attempting restart`);
+                
+                // Try to restart the video once before giving up
+                if (await restartVideo(page, session)) {
+                    session.log('Video restarted successfully, continuing...');
+                    stuckCount = 0;
+                    previousSeconds = 0;
+                    lastProgressTime = Date.now();
+                    startTime = Date.now(); // Reset the overall timeout
+                    continue;
+                }
+                
+                session.log(`Video restart failed, will reload page and restart task`);
                 await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
                 await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
                 session.log('Back to list');
                 await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
                 return false;
             }
-        } else {
-            stuckCount = 0;
-            previousSeconds = watchedSeconds;
         }
 
         if (watchedSeconds >= CONSTANTS.VIDEO.REQUIRED_SECONDS) break;
