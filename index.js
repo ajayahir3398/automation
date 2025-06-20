@@ -357,6 +357,16 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 
+// Helper to go back to list, log, screenshot, and return
+async function goBackToListAndLog(page, session, reason) {
+    session.log(reason);
+    await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+    await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+    session.log('Back to list');
+    await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
+    return { success: true, message: 'Back to list' };
+}
+
 // Login automation function
 async function performTasks(session, phoneNumber, password) {
     try {
@@ -470,6 +480,8 @@ async function handleVideoWatching(page, session) {
     let stuckCount = 0;
     let lastWatchedSeconds = 0;
     const startTime = Date.now();
+    const ALMOST_DONE_THRESHOLD = 12; // If stuck at 12, 13, or 14, allow force-complete
+    const ALMOST_DONE_STUCK_COUNT = 5; // 5 seconds stuck at almost done
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         // Check if we've been stuck for too long
@@ -483,21 +495,30 @@ async function handleVideoWatching(page, session) {
         }
 
         // Get current watched seconds
-        watchedSeconds = await page.evaluate(() => {
-            const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
-                .find(p => p.textContent.includes('Currently watched'));
-            if (watchedText) {
-                const secondsMatch = watchedText.textContent.match(/\d+/);
-                return secondsMatch ? parseInt(secondsMatch[0]) : 0;
-            }
-            return 0;
-        });
+    watchedSeconds = await page.evaluate(() => {
+        const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
+            .find(p => p.textContent.includes('Currently watched'));
+        if (watchedText) {
+            const secondsMatch = watchedText.textContent.match(/\d+/);
+            return secondsMatch ? parseInt(secondsMatch[0]) : 0;
+        }
+        return 0;
+    });
 
         session.log(`Watched: ${watchedSeconds}s / ${CONSTANTS.VIDEO.REQUIRED_SECONDS}s`);
 
         // Check if video is stuck (same seconds for too long)
         if (watchedSeconds === lastWatchedSeconds) {
             stuckCount++;
+            // If stuck at 12, 13, or 14 for 5 seconds, treat as completed
+            if (
+                watchedSeconds >= ALMOST_DONE_THRESHOLD &&
+                watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS &&
+                stuckCount >= ALMOST_DONE_STUCK_COUNT
+            ) {
+                session.log(`Video stuck at ${watchedSeconds}s for ${ALMOST_DONE_STUCK_COUNT} seconds, force-completing video.`);
+                return true;
+            }
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
                 session.log('Video appears to be stuck, going back to list');
                 await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
@@ -516,7 +537,7 @@ async function handleVideoWatching(page, session) {
     }
 
     session.log(`Video watching completed: ${watchedSeconds}s`);
-    return true;
+            return true;
 }
 
 // Helper function to handle a single task
@@ -553,38 +574,33 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         session.log(`Ad text: ${adText}`);
 
         // Only attempt to play the video once per task
-        try {
-            if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
-                session.log('Video missing');
-                throw new Error('Video element not found');
-            }
-
-            await page.evaluate(() => {
-                const playButton = document.querySelector('.vjs-big-play-button');
-                if (playButton) {
-                    playButton.click();
-                }
-            });
-
-            await page.waitForFunction(() => {
-                const video = document.querySelector('video');
-                return video && !video.paused;
-            });
-
-            session.log('Video playing');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
-
-            const videoSuccess = await handleVideoWatching(page, session);
-
-            if (!videoSuccess) {
-                session.log('Video failed');
-                throw new Error('Video watching failed');
-            }
-        } catch (error) {
-            session.log(`Video error: ${error.message}`);
-            throw error;
+        if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
+            session.log('Video missing');
+            throw new Error('Video element not found');
         }
 
+        await page.evaluate(() => {
+            const playButton = document.querySelector('.vjs-big-play-button');
+            if (playButton) {
+                playButton.click();
+            }
+        });
+
+        await page.waitForFunction(() => {
+            const video = document.querySelector('video');
+            return video && !video.paused;
+        });
+
+        session.log('Video playing');
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
+
+        const videoSuccess = await handleVideoWatching(page, session);
+
+        if (!videoSuccess) {
+            return await goBackToListAndLog(page, session, 'Video failed');
+        }
+
+        // If video succeeded, proceed to answer submission
         await handleAnswerSubmission(page, adText, session);
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
@@ -596,14 +612,8 @@ async function handleSingleTask(page, remainingTasksCount, session) {
             session.log('All done');
             return { success: true, message: 'All tasks done' };
         }
-
     } catch (error) {
-        session.log(`Task error: ${error.message}`);
-        await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
-        await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-        session.log('Back to list');
-        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
-        throw error;
+        return await goBackToListAndLog(page, session, `Task error: ${error.message}`);
     }
 }
 
@@ -668,16 +678,10 @@ async function handleAnswerSubmission(page, adText, session) {
             });
             session.log('Next task');
         } else {
-            session.log('No match found');
-            await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            session.log('Back to list');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
-            return { success: true, message: 'Back to list' };
+            return await goBackToListAndLog(page, session, 'No match found');
         }
     } catch (error) {
-        session.log(`Answer error: ${error.message}`);
-        throw error;
+        return await goBackToListAndLog(page, session, `Answer error: ${error.message}`);
     }
 }
 
