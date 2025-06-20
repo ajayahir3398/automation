@@ -237,8 +237,7 @@ const CONSTANTS = {
         REQUIRED_SECONDS: 15,
         MAX_STUCK_TIME: 30000,    // 30 seconds
         CHECK_INTERVAL: 1000,     // 1 second
-        MAX_STUCK_COUNT: 5,       // Maximum number of times seconds can be the same
-        MAX_RESTART_ATTEMPTS: 3,  // Maximum number of restart attempts
+        MAX_STUCK_COUNT: 10,       // Maximum number of times seconds can be the same
         RESTART_WAIT: 2000        // Wait time after restart
     }
 };
@@ -468,24 +467,22 @@ async function getRemainingTasksCount(page) {
 async function handleVideoWatching(page, session) {
     session.log('Video started');
     let watchedSeconds = 0;
-    let previousSeconds = 0;
     let stuckCount = 0;
-    let startTime = Date.now();
-    let lastProgressTime = Date.now();
+    let lastWatchedSeconds = 0;
+    const startTime = Date.now();
 
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
-        if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
-            session.log('Video timeout');
-            if (await restartVideo(page, session)) {
-                startTime = Date.now();
-                stuckCount = 0;
-                previousSeconds = 0;
-                lastProgressTime = Date.now();
-                continue;
-            }
+        // Check if we've been stuck for too long
+        if (Date.now() - startTime > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
+            session.log(`Video watching timeout after ${CONSTANTS.VIDEO.MAX_STUCK_TIME / 1000}s`);
+            await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+            session.log('Back to list');
+            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
             return false;
         }
 
+        // Get current watched seconds
         watchedSeconds = await page.evaluate(() => {
             const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
                 .find(p => p.textContent.includes('Currently watched'));
@@ -496,191 +493,30 @@ async function handleVideoWatching(page, session) {
             return 0;
         });
 
-        session.log(`Watched: ${watchedSeconds}s`);
+        session.log(`Watched: ${watchedSeconds}s / ${CONSTANTS.VIDEO.REQUIRED_SECONDS}s`);
 
-        // Check if video has progressed
-        if (watchedSeconds > previousSeconds) {
-            stuckCount = 0;
-            previousSeconds = watchedSeconds;
-            lastProgressTime = Date.now();
-        } else if (watchedSeconds === previousSeconds) {
+        // Check if video is stuck (same seconds for too long)
+        if (watchedSeconds === lastWatchedSeconds) {
             stuckCount++;
-            
-            // More lenient stuck detection - only consider stuck if:
-            // 1. We're not at the end of the video (10s or more)
-            // 2. We've been stuck for a reasonable amount of time
-            // 3. We're not at a common completion point
-            
-            const timeSinceLastProgress = Date.now() - lastProgressTime;
-            const isAtCompletionPoint = watchedSeconds >= 10; // Videos often complete at 10s
-            const isNearCompletion = watchedSeconds >= 8; // Videos near completion
-            const hasBeenStuckTooLong = timeSinceLastProgress > (isNearCompletion ? 20000 : 15000); // More lenient for near completion
-            
-            // If we're at 10 seconds or more, wait a bit longer to confirm completion
-            if (isAtCompletionPoint && watchedSeconds >= 10) {
-                // Wait a bit more to confirm the video is actually complete
-                await wait(3000);
-                
-                // Check one more time to see if it progressed
-                const finalCheck = await page.evaluate(() => {
-                    const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
-                        .find(p => p.textContent.includes('Currently watched'));
-                    if (watchedText) {
-                        const secondsMatch = watchedText.textContent.match(/\d+/);
-                        return secondsMatch ? parseInt(secondsMatch[0]) : 0;
-                    }
-                    return 0;
-                });
-                
-                if (finalCheck === watchedSeconds) {
-                    session.log(`Video confirmed complete at ${watchedSeconds}s`);
-                    return true;
-                } else {
-                    session.log(`Video progressed to ${finalCheck}s after wait`);
-                    watchedSeconds = finalCheck;
-                    stuckCount = 0;
-                    previousSeconds = finalCheck;
-                    lastProgressTime = Date.now();
-                }
-            }
-            
-            // Additional check: look for completion indicators in the UI
-            if (isAtCompletionPoint && watchedSeconds >= 10) {
-                const hasCompletionIndicator = await page.evaluate(() => {
-                    // Look for common completion indicators
-                    const completionTexts = [
-                        'Video completed',
-                        'Task completed',
-                        'Continue',
-                        'Next',
-                        'Submit',
-                        'Start Answering'
-                    ];
-                    
-                    const pageText = document.body.textContent.toLowerCase();
-                    return completionTexts.some(text => pageText.includes(text.toLowerCase()));
-                });
-                
-                if (hasCompletionIndicator) {
-                    session.log(`Video completion detected via UI indicators at ${watchedSeconds}s`);
-                    return true;
-                }
-                
-                // Check if video has actually finished playing
-                const videoState = await page.evaluate(() => {
-                    const video = document.querySelector('video');
-                    if (video) {
-                        return {
-                            ended: video.ended,
-                            currentTime: video.currentTime,
-                            duration: video.duration,
-                            paused: video.paused
-                        };
-                    }
-                    return null;
-                });
-                
-                if (videoState && (videoState.ended || (videoState.currentTime >= videoState.duration - 1))) {
-                    session.log(`Video element indicates completion at ${watchedSeconds}s (ended: ${videoState.ended}, currentTime: ${videoState.currentTime}, duration: ${videoState.duration})`);
-                    return true;
-                }
-            }
-            
-            if (stuckCount >= (isNearCompletion ? CONSTANTS.VIDEO.MAX_STUCK_COUNT + 2 : CONSTANTS.VIDEO.MAX_STUCK_COUNT) && hasBeenStuckTooLong && !isAtCompletionPoint) {
-                session.log(`Video stuck at ${watchedSeconds}s for ${Math.round(timeSinceLastProgress/1000)}s, attempting restart`);
-                
-                // Try to restart the video once before giving up
-                if (await restartVideo(page, session)) {
-                    session.log('Video restarted successfully, continuing...');
-                    stuckCount = 0;
-                    previousSeconds = 0;
-                    lastProgressTime = Date.now();
-                    startTime = Date.now(); // Reset the overall timeout
-                    continue;
-                }
-                
-                session.log(`Video restart failed, will reload page and restart task`);
+            if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
+                session.log('Video appears to be stuck, going back to list');
                 await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
                 await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
                 session.log('Back to list');
                 await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
                 return false;
             }
+        } else {
+            // Video is progressing, reset stuck count
+            stuckCount = 0;
         }
 
-        if (watchedSeconds >= CONSTANTS.VIDEO.REQUIRED_SECONDS) break;
+        lastWatchedSeconds = watchedSeconds;
         await wait(CONSTANTS.VIDEO.CHECK_INTERVAL);
     }
 
+    session.log(`Video watching completed: ${watchedSeconds}s`);
     return true;
-}
-
-// Helper function to restart video
-async function restartVideo(page, session) {
-    session.log('Restarting video');
-    try {
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.click();
-                if (video.paused) {
-                    video.play();
-                }
-            }
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const playButton = document.querySelector('.vjs-big-play-button');
-            if (playButton) playButton.click();
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.load();
-                video.play();
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const isPlaying = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        if (isPlaying) {
-            session.log('Video restarted');
-            return true;
-        }
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.currentTime = 0;
-                const playPromise = video.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(() => {
-                        document.body.click();
-                        video.play();
-                    });
-                }
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const finalCheck = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        return finalCheck;
-
-    } catch (error) {
-        session.log(`Restart failed: ${error.message}`);
-        return false;
-    }
 }
 
 // Helper function to handle a single task
@@ -763,46 +599,10 @@ async function handleSingleTask(page, remainingTasksCount, session) {
 
     } catch (error) {
         session.log(`Task error: ${error.message}`);
-        if (error.message && error.message.includes('reload and restart task')) {
-            session.log('Reloading page and restarting task from task detail...');
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-
-            // Re-navigate to the task tab
-            await page.evaluate(() => {
-                const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
-                const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
-                if (taskTab) {
-                    taskTab.click();
-                }
-            });
-            await page.waitForNavigation({
-                waitUntil: 'domcontentloaded',
-                timeout: 60000
-            });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-
-            // Click the first task again
-            const taskClicked = await page.evaluate(() => {
-                const taskItems = document.querySelectorAll('div[data-v-02e24912].div');
-                if (taskItems.length > 0) {
-                    taskItems[0].click();
-                    return true;
-                }
-                return false;
-            });
-            if (!taskClicked) {
-                session.log('No tasks found after reload');
-                throw new Error('No task items found after reload');
-            }
-            session.log('Task selected after reload');
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.phoneNumber);
-            session.log('Task page loaded after reload');
-
-            // Now, recursively call handleSingleTask to restart the process
-            return await handleSingleTask(page, remainingTasksCount, session);
-        }
+        await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+        await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+        session.log('Back to list');
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
         throw error;
     }
 }
