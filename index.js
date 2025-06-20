@@ -441,6 +441,18 @@ async function performTasks(session, phoneNumber, password) {
                 session.log(result.message);
                 throw new Error(result.message);
             }
+
+            // Always re-navigate to the task tab after a task (especially after a failure)
+            await page.evaluate(() => {
+                const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
+                const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
+                if (taskTab) {
+                    taskTab.click();
+                }
+            });
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+
             remainingTasksCount = await getRemainingTasksCount(page);
             session.log(`Tasks left: ${remainingTasksCount}`);
         }
@@ -495,15 +507,15 @@ async function handleVideoWatching(page, session) {
         }
 
         // Get current watched seconds
-    watchedSeconds = await page.evaluate(() => {
-        const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
-            .find(p => p.textContent.includes('Currently watched'));
-        if (watchedText) {
-            const secondsMatch = watchedText.textContent.match(/\d+/);
-            return secondsMatch ? parseInt(secondsMatch[0]) : 0;
-        }
-        return 0;
-    });
+        watchedSeconds = await page.evaluate(() => {
+            const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
+                .find(p => p.textContent.includes('Currently watched'));
+            if (watchedText) {
+                const secondsMatch = watchedText.textContent.match(/\d+/);
+                return secondsMatch ? parseInt(secondsMatch[0]) : 0;
+            }
+            return 0;
+        });
 
         session.log(`Watched: ${watchedSeconds}s / ${CONSTANTS.VIDEO.REQUIRED_SECONDS}s`);
 
@@ -537,7 +549,7 @@ async function handleVideoWatching(page, session) {
     }
 
     session.log(`Video watching completed: ${watchedSeconds}s`);
-            return true;
+    return true;
 }
 
 // Helper function to handle a single task
