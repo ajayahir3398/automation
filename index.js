@@ -451,6 +451,8 @@ async function performTasks(session, phoneNumber, password) {
                 }
             });
             await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            // Wait for the task list to appear
+            await waitForElement(page, CONSTANTS.SELECTORS.TASK.TASK_LIST, 30000);
             await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
 
             remainingTasksCount = await getRemainingTasksCount(page);
