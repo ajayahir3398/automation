@@ -237,8 +237,7 @@ const CONSTANTS = {
         REQUIRED_SECONDS: 15,
         MAX_STUCK_TIME: 30000,    // 30 seconds
         CHECK_INTERVAL: 1000,     // 1 second
-        MAX_STUCK_COUNT: 5,       // Maximum number of times seconds can be the same
-        MAX_RESTART_ATTEMPTS: 3,  // Maximum number of restart attempts
+        MAX_STUCK_COUNT: 10,       // Maximum number of times seconds can be the same
         RESTART_WAIT: 2000        // Wait time after restart
     }
 };
@@ -358,6 +357,16 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 
+// Helper to go back to list, log, screenshot, and return
+async function goBackToListAndLog(page, session, reason) {
+    session.log(reason);
+    await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+    await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+    session.log('Back to list');
+    await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
+    return { success: true, message: 'Back to list' };
+}
+
 // Login automation function
 async function performTasks(session, phoneNumber, password) {
     try {
@@ -432,6 +441,20 @@ async function performTasks(session, phoneNumber, password) {
                 session.log(result.message);
                 throw new Error(result.message);
             }
+
+            // Always re-navigate to the task tab after a task (especially after a failure)
+            await page.evaluate(() => {
+                const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
+                const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
+                if (taskTab) {
+                    taskTab.click();
+                }
+            });
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            // Wait for the task list to appear
+            await waitForElement(page, CONSTANTS.SELECTORS.TASK.TASK_LIST, 30000);
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+
             remainingTasksCount = await getRemainingTasksCount(page);
             session.log(`Tasks left: ${remainingTasksCount}`);
         }
@@ -468,7 +491,6 @@ async function getRemainingTasksCount(page) {
 async function handleVideoWatching(page, session) {
     session.log('Video started');
     let watchedSeconds = 0;
-    let previousSeconds = 0;
     let stuckCount = 0;
     let startTime = Date.now();
 
@@ -484,6 +506,7 @@ async function handleVideoWatching(page, session) {
             return false;
         }
 
+        // Get current watched seconds
         watchedSeconds = await page.evaluate(() => {
             const watchedText = Array.from(document.querySelectorAll('p[data-v-1d18d737]'))
                 .find(p => p.textContent.includes('Currently watched'));
@@ -494,7 +517,7 @@ async function handleVideoWatching(page, session) {
             return 0;
         });
 
-        session.log(`Watched: ${watchedSeconds}s`);
+        session.log(`Watched: ${watchedSeconds}s / ${CONSTANTS.VIDEO.REQUIRED_SECONDS}s`);
 
         if (watchedSeconds === previousSeconds) {
             stuckCount++;
@@ -516,79 +539,12 @@ async function handleVideoWatching(page, session) {
             previousSeconds = watchedSeconds;
         }
 
-        if (watchedSeconds >= CONSTANTS.VIDEO.REQUIRED_SECONDS) break;
+        lastWatchedSeconds = watchedSeconds;
         await wait(CONSTANTS.VIDEO.CHECK_INTERVAL);
     }
 
+    session.log(`Video watching completed: ${watchedSeconds}s`);
     return true;
-}
-
-// Helper function to restart video
-async function restartVideo(page, session) {
-    session.log('Restarting video');
-    try {
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.click();
-                if (video.paused) {
-                    video.play();
-                }
-            }
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const playButton = document.querySelector('.vjs-big-play-button');
-            if (playButton) playButton.click();
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.load();
-                video.play();
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const isPlaying = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        if (isPlaying) {
-            session.log('Video restarted');
-            return true;
-        }
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.currentTime = 0;
-                const playPromise = video.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(() => {
-                        document.body.click();
-                        video.play();
-                    });
-                }
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const finalCheck = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        return finalCheck;
-
-    } catch (error) {
-        session.log(`Restart failed: ${error.message}`);
-        return false;
-    }
 }
 
 // Helper function to handle a single task
@@ -625,38 +581,33 @@ async function handleSingleTask(page, remainingTasksCount, session) {
         session.log(`Ad text: ${adText}`);
 
         // Only attempt to play the video once per task
-        try {
-            if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
-                session.log('Video missing');
-                throw new Error('Video element not found');
-            }
-
-            await page.evaluate(() => {
-                const playButton = document.querySelector('.vjs-big-play-button');
-                if (playButton) {
-                    playButton.click();
-                }
-            });
-
-            await page.waitForFunction(() => {
-                const video = document.querySelector('video');
-                return video && !video.paused;
-            });
-
-            session.log('Video playing');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
-
-            const videoSuccess = await handleVideoWatching(page, session);
-
-            if (!videoSuccess) {
-                session.log('Video failed');
-                throw new Error('Video watching failed');
-            }
-        } catch (error) {
-            session.log(`Video error: ${error.message}`);
-            throw error;
+        if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
+            session.log('Video missing');
+            throw new Error('Video element not found');
         }
 
+        await page.evaluate(() => {
+            const playButton = document.querySelector('.vjs-big-play-button');
+            if (playButton) {
+                playButton.click();
+            }
+        });
+
+        await page.waitForFunction(() => {
+            const video = document.querySelector('video');
+            return video && !video.paused;
+        });
+
+        session.log('Video playing');
+        await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
+
+        const videoSuccess = await handleVideoWatching(page, session);
+
+        if (!videoSuccess) {
+            return await goBackToListAndLog(page, session, 'Video failed');
+        }
+
+        // If video succeeded, proceed to answer submission
         await handleAnswerSubmission(page, adText, session);
 
         await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
@@ -668,50 +619,8 @@ async function handleSingleTask(page, remainingTasksCount, session) {
             session.log('All done');
             return { success: true, message: 'All tasks done' };
         }
-
     } catch (error) {
-        session.log(`Task error: ${error.message}`);
-        if (error.message && error.message.includes('reload and restart task')) {
-            session.log('Reloading page and restarting task from task detail...');
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-
-            // Re-navigate to the task tab
-            await page.evaluate(() => {
-                const tabs = Array.from(document.querySelectorAll('.van-tabbar-item'));
-                const taskTab = tabs.find(tab => tab.textContent.includes('Task'));
-                if (taskTab) {
-                    taskTab.click();
-                }
-            });
-            await page.waitForNavigation({
-                waitUntil: 'domcontentloaded',
-                timeout: 60000
-            });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-
-            // Click the first task again
-            const taskClicked = await page.evaluate(() => {
-                const taskItems = document.querySelectorAll('div[data-v-02e24912].div');
-                if (taskItems.length > 0) {
-                    taskItems[0].click();
-                    return true;
-                }
-                return false;
-            });
-            if (!taskClicked) {
-                session.log('No tasks found after reload');
-                throw new Error('No task items found after reload');
-            }
-            session.log('Task selected after reload');
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.TASK_DETAILS, session.phoneNumber);
-            session.log('Task page loaded after reload');
-
-            // Now, recursively call handleSingleTask to restart the process
-            return await handleSingleTask(page, remainingTasksCount, session);
-        }
-        throw error;
+        return await goBackToListAndLog(page, session, `Task error: ${error.message}`);
     }
 }
 
@@ -776,16 +685,10 @@ async function handleAnswerSubmission(page, adText, session) {
             });
             session.log('Next task');
         } else {
-            session.log('No match found');
-            await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-            session.log('Back to list');
-            await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
-            return { success: true, message: 'Back to list' };
+            return await goBackToListAndLog(page, session, 'No match found');
         }
     } catch (error) {
-        session.log(`Answer error: ${error.message}`);
-        throw error;
+        return await goBackToListAndLog(page, session, `Answer error: ${error.message}`);
     }
 }
 
