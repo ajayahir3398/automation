@@ -475,12 +475,6 @@ async function handleVideoWatching(page, session) {
     while (watchedSeconds < CONSTANTS.VIDEO.REQUIRED_SECONDS) {
         if ((Date.now() - startTime) > CONSTANTS.VIDEO.MAX_STUCK_TIME) {
             session.log('Video timeout');
-            if (await restartVideo(page, session)) {
-                startTime = Date.now();
-                stuckCount = 0;
-                previousSeconds = 0;
-                continue;
-            }
             return false;
         }
 
@@ -504,11 +498,6 @@ async function handleVideoWatching(page, session) {
             }
 
             if (stuckCount >= CONSTANTS.VIDEO.MAX_STUCK_COUNT) {
-                session.log('Video stuck, will reload page and restart task');
-                await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
-                await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
-                session.log('Back to list');
-                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
                 return false;
             }
         } else {
@@ -521,74 +510,6 @@ async function handleVideoWatching(page, session) {
     }
 
     return true;
-}
-
-// Helper function to restart video
-async function restartVideo(page, session) {
-    session.log('Restarting video');
-    try {
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.click();
-                if (video.paused) {
-                    video.play();
-                }
-            }
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const playButton = document.querySelector('.vjs-big-play-button');
-            if (playButton) playButton.click();
-        });
-        await wait(1000);
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.load();
-                video.play();
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const isPlaying = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        if (isPlaying) {
-            session.log('Video restarted');
-            return true;
-        }
-
-        await page.evaluate(() => {
-            const video = document.querySelector('video');
-            if (video) {
-                video.currentTime = 0;
-                const playPromise = video.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(() => {
-                        document.body.click();
-                        video.play();
-                    });
-                }
-            }
-        });
-        await wait(CONSTANTS.VIDEO.RESTART_WAIT);
-
-        const finalCheck = await page.evaluate(() => {
-            const video = document.querySelector('video');
-            return video && !video.paused;
-        });
-
-        return finalCheck;
-
-    } catch (error) {
-        session.log(`Restart failed: ${error.message}`);
-        return false;
-    }
 }
 
 // Helper function to handle a single task
@@ -650,7 +571,13 @@ async function handleSingleTask(page, remainingTasksCount, session) {
 
             if (!videoSuccess) {
                 session.log('Video failed');
-                throw new Error('Video watching failed');
+                // throw new Error('Video watching failed');
+                // session.log('No match found');
+                await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
+                await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
+                session.log('Back to list');
+                await takeScreenshot(page, CONSTANTS.SCREENSHOTS.GO_BACK, session.phoneNumber);
+                return { success: true, message: 'Back to list' };
             }
         } catch (error) {
             session.log(`Video error: ${error.message}`);
