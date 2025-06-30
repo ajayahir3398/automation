@@ -802,9 +802,8 @@ async function handleSuccessfulCompletion(session, phoneNumber) {
     try {
         session.log('Automation completed successfully - starting cleanup');
 
-        // Delete screenshots for successful completion
-        await deleteScreenshotsForPhone(phoneNumber);
-        session.log('Screenshots deleted for successful completion');
+        // Don't delete screenshots for successful completion - keep them for user review
+        session.log('Screenshots preserved for successful completion');
 
         // Stop the session
         session.stop();
