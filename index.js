@@ -566,16 +566,30 @@ async function handleSingleTask(page, remainingTasksCount, session) {
                 return { success: true, message: 'Back to list' };
             }
 
-            // Try to play the video (muted for autoplay)
+            // Try clicking the play button if it exists
+            const playButtonSelector = CONSTANTS.SELECTORS.TASK.PLAY_BUTTON;
+            const playButtonExists = await page.$(playButtonSelector);
+            if (playButtonExists) {
+                session.log('Play button found, clicking play button');
+                await page.click(playButtonSelector);
+                await wait(1000); // Wait a bit after clicking
+            } else {
+                session.log('Play button not found, will try video.play() directly');
+            }
+
+            // Try to play the video (muted for autoplay) as a fallback
             const playResult = await page.evaluate(() => {
                 const video = document.querySelector('video');
                 if (!video) return 'no-video';
                 try {
                     video.muted = true;
-                    video.play();
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        return playPromise.then(() => 'playing').catch(e => 'play-error:' + e.message);
+                    }
                     return 'playing';
                 } catch (e) {
-                    return 'play-error';
+                    return 'play-error:' + e.message;
                 }
             });
             session.log(`Video play result: ${playResult}`);
