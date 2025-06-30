@@ -437,6 +437,7 @@ async function performTasks(session, phoneNumber, password) {
         session.log(`Tasks left: ${remainingTasksCount}`);
 
         while (remainingTasksCount > 0) {
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
             const result = await handleSingleTask(page, remainingTasksCount, session);
             if (!result.success) {
                 session.log(result.message);
