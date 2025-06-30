@@ -557,22 +557,38 @@ async function handleSingleTask(page, remainingTasksCount, session) {
 
         // Only attempt to play the video once per task
         try {
-            if (!await waitForElement(page, CONSTANTS.SELECTORS.TASK.VIDEO)) {
-                session.log('Video missing');
-                throw new Error('Video element not found');
+            // Wait for the video element to appear
+            const videoSelector = 'video';
+            const videoExists = await page.waitForSelector(videoSelector, { timeout: 10000 }).catch(() => null);
+            if (!videoExists) {
+                session.log('Video element not found, skipping task');
+                return { success: true, message: 'Back to list' };
             }
 
-            await page.evaluate(() => {
-                const playButton = document.querySelector('.vjs-big-play-button');
-                if (playButton) {
-                    playButton.click();
+            // Try to play the video (muted for autoplay)
+            const playResult = await page.evaluate(() => {
+                const video = document.querySelector('video');
+                if (!video) return 'no-video';
+                try {
+                    video.muted = true;
+                    video.play();
+                    return 'playing';
+                } catch (e) {
+                    return 'play-error';
                 }
             });
+            session.log(`Video play result: ${playResult}`);
 
-            await page.waitForFunction(() => {
+            // Wait for video to start playing
+            const isPlaying = await page.waitForFunction(() => {
                 const video = document.querySelector('video');
                 return video && !video.paused;
-            });
+            }, { timeout: 10000 }).catch(() => false);
+
+            if (!isPlaying) {
+                session.log('Video did not start playing, skipping task');
+                return { success: true, message: 'Back to list' };
+            }
 
             session.log('Video playing');
             await takeScreenshot(page, CONSTANTS.SCREENSHOTS.VIDEO_PLAYING, session.phoneNumber);
@@ -581,8 +597,6 @@ async function handleSingleTask(page, remainingTasksCount, session) {
 
             if (!videoSuccess) {
                 session.log('Video failed');
-                // throw new Error('Video watching failed');
-                // session.log('No match found');
                 await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 });
                 await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
                 session.log('Back to list');
@@ -591,7 +605,7 @@ async function handleSingleTask(page, remainingTasksCount, session) {
             }
         } catch (error) {
             session.log(`Video error: ${error.message}`);
-            throw error;
+            return { success: true, message: 'Back to list' };
         }
 
         await handleAnswerSubmission(page, adText, session);
