@@ -235,7 +235,7 @@ const CONSTANTS = {
         REQUIRED_SECONDS: 15,
         MAX_STUCK_TIME: 30000,    // 30 seconds
         CHECK_INTERVAL: 1000,     // 1 second
-        MAX_STUCK_COUNT: 5,       // Maximum number of times seconds can be the same
+        MAX_STUCK_COUNT: 10,       // Maximum number of times seconds can be the same
         MAX_RESTART_ATTEMPTS: 3,  // Maximum number of restart attempts
         RESTART_WAIT: 2000        // Wait time after restart
     }
@@ -437,7 +437,6 @@ async function performTasks(session, phoneNumber, password) {
         session.log(`Tasks left: ${remainingTasksCount}`);
 
         while (remainingTasksCount > 0) {
-            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
             const result = await handleSingleTask(page, remainingTasksCount, session);
             if (!result.success) {
                 session.log(result.message);
@@ -675,6 +674,7 @@ async function handleSingleTask(page, remainingTasksCount, session) {
             session.log('Task page loaded after reload');
 
             // Now, recursively call handleSingleTask to restart the process
+            await wait(CONSTANTS.WAIT_TIMES.PAGE_LOAD);
             return await handleSingleTask(page, remainingTasksCount, session);
         }
         throw error;
