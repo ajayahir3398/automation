@@ -114,8 +114,6 @@ class AutomationSession {
                 this.log(`Error closing browser: ${error.message}`);
             }
         }
-        // Delete screenshots for this phone number only when manually stopped
-        await deleteScreenshotsForPhone(this.phoneNumber);
     }
 }
 
@@ -347,6 +345,18 @@ app.get('/screenshots/:phoneNumber', (req, res) => {
             success: false,
             message: 'Failed to read screenshots directory. Please try again.'
         });
+    }
+});
+
+// New endpoint to delete all screenshots for a phone number
+app.delete('/screenshots/:phoneNumber', async (req, res) => {
+    const phoneNumber = req.params.phoneNumber;
+    try {
+        await deleteScreenshotsForPhone(phoneNumber);
+        res.json({ success: true, message: 'Screenshots deleted successfully.' });
+    } catch (error) {
+        console.error('Error deleting screenshots:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete screenshots.' });
     }
 });
 
